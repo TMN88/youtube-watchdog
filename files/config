@@ -1,0 +1,8 @@
+config watchdog 'main'
+	option mode 'safe'
+	option interval '180'
+	# SSH mode requires a separate wired/Wi-Fi LAN client using this router.
+	option client_host ''
+	option client_user 'watchdog'
+	option client_confirmed '0'
+	# Key and known_hosts are provisioned manually, never downloaded.

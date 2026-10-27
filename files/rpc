@@ -1,0 +1,21 @@
+#!/bin/sh
+. /usr/share/libubox/jshn.sh
+reply() { json_init; json_add_boolean ok "$1"; json_dump; }
+case "$1" in
+    list) echo '{"status":{},"logs":{},"start":{},"stop":{},"restart":{},"enable":{},"disable":{},"check":{}}' ;;
+    call)
+        # Drain bounded rpcd input. No user-provided command, path or arguments.
+        read -r input
+        case "$2" in
+            status|logs) exec /usr/bin/youtube-watchdog "$2" ;;
+            start|stop|restart|enable|disable)
+                if /etc/init.d/youtube-watchdog "$2" >/dev/null 2>&1; then reply 1; else reply 0; fi ;;
+            check)
+                mkdir -p /tmp/youtube-watchdog
+                if ! flock -n /tmp/youtube-watchdog/operation.lock true 2>/dev/null; then reply 0; exit 0; fi
+                /usr/bin/youtube-watchdog check </dev/null >/dev/null 2>&1 &
+                reply 1 ;;
+            *) exit 1 ;;
+        esac ;;
+    *) exit 1 ;;
+esac

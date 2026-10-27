@@ -1,0 +1,8 @@
+{
+  "admin/services/youtube-watchdog": {
+    "title": "YouTube Watchdog",
+    "order": 80,
+    "action": { "type": "view", "path": "youtube-watchdog/overview" },
+    "depends": { "acl": ["luci-app-youtube-watchdog"] }
+  }
+}
