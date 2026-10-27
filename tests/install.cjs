@@ -36,7 +36,8 @@ esac
   write(path.join(root,'running'),'');write(path.join(root,'enabled'),'');
  }
  let installer=fs.readFileSync(path.join(repo,'install.sh'),'utf8');
- for(const prefix of ['/etc/','/usr/','/www/','/tmp/'])installer=installer.replaceAll(prefix,p(root)+prefix);
+ // Single pass: Linux fixture roots themselves live under /tmp.
+ installer=installer.replace(/\/(?:etc|usr|www|tmp)\//g,prefix=>p(root)+prefix);
  const commands=`
 id() { echo 0; }
 uci() { echo watchdog; }
