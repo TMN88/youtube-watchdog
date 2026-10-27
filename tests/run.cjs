@@ -44,7 +44,11 @@ https_code() {
   *) ${options.api || 'echo 403'} ;;
  esac
 }
-actual=$(probe) || exit 1
+set +e
+actual=$(probe)
+probe_rc=$?
+set -e
+[ "$probe_rc" -eq 0 ]
 [ "$actual" = '${expected}' ]
 `);
 }
