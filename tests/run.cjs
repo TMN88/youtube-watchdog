@@ -13,6 +13,10 @@ function shell(name, code) {
     const file = path.join(tmp, 'case.sh');
     fs.writeFileSync(file, 'set -eu\n' + code + '\n');
     const r = cp.spawnSync(busybox || 'sh', busybox ? ['sh', posix(file)] : [file], { encoding: 'utf8', env: {...process.env, TEST_TMP:posix(tmp)} });
+    if(r.status !== 0) {
+        const trace=cp.spawnSync(busybox || 'sh',busybox?['sh','-x',posix(file)]:['-x',file],{encoding:'utf8',env:{...process.env,TEST_TMP:posix(tmp)}});
+        console.error(trace.stderr);
+    }
     assert.equal(r.status, 0, name + '\n' + r.stdout + r.stderr);
     console.log('PASS ' + name); count++;
 }
@@ -196,6 +200,32 @@ run_probe() { result=YOUTUBE_DOWN; return 1; }
 cycle && exit 1
 [ ! -e "$TEST_TMP/restart-count" ]
 `);
+shell('journal includes only restart and control, newest first',common+`
+logread() {
+ echo 'Tue Oct 27 user.notice youtube-watchdog-event: restart|2026-10-27 20:00:00 +0300|confirmed_client_failure|success'
+ echo 'Tue Oct 27 user.notice other-service: restart|2026-10-27 20:00:01 +0300|confirmed_client_failure|success'
+ echo 'Tue Oct 27 user.notice youtube-watchdog-event: heartbeat|2026-10-27 20:00:02 +0300|periodic|success'
+ echo 'Tue Oct 27 user.notice youtube-watchdog-event: control|2026-10-27 20:00:15 +0300|post_restart|restored'
+}
+json_init() { JSON=''; }
+json_add_array() { :; }; json_close_array() { :; }
+json_add_object() { :; }; json_close_object() { :; }
+json_add_string() {
+ if [ "$1" = record ]; then printf '%s\\n' "$2"; else JSON="$JSON;$1=$2"; fi
+}
+json_dump() { printf '%s\\n' "$JSON"; }
+output=$(logs)
+[ "$(printf '%s\\n' "$output" | grep -c 'type=')" -eq 2 ]
+printf '%s\\n' "$output" | head -n 1 | grep -q 'type=control'
+! printf '%s\\n' "$output" | grep -q heartbeat
+`);
+if(process.platform !== 'win32') {
+ shell('kernel flock rejects concurrent operations',common+`
+lock
+(exec 9>"$R/operation.lock"; ! flock -n 9)
+`);
+ shell('kernel releases operation lock on process exit',common+'\nlock\n');
+}
 // Static guards supplement behavior tests: check branch cannot call cycle/restart.
 assert.match(read('files/watchdog.sh'),/check\) lock[^\n]+run_probe; status/);
 assert(!read('uninstall.sh').includes('/etc/init.d/zapret2')); count++;
