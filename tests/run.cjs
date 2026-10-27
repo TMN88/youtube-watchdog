@@ -40,7 +40,8 @@ https_code() {
   *) ${options.api || 'echo 403'} ;;
  esac
 }
-[ "$(probe)" = '${expected}' ]
+actual=$(probe) || exit 1
+[ "$actual" = '${expected}' ]
 `);
 }
 probeTest('403/404 count as TLS/HTTP reachability',{},'HEALTHY');
