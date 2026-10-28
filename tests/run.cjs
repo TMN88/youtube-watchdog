@@ -53,6 +53,7 @@ set -e
 `);
 }
 probeTest('403/404 count as TLS/HTTP reachability',{},'HEALTHY');
+probeTest('HTTP 206 range responses are healthy',{control:'echo 206',www:'echo 206',img:'echo 206',api:'echo 206'},'HEALTHY');
 probeTest('two independent reachable resources suffice',{www:'return 28'},'HEALTHY');
 probeTest('DNS failure veto',{dns:false},'DNS_DOWN');
 probeTest('general HTTPS outage veto',{control:'return 28'},'NETWORK_DOWN');
@@ -66,11 +67,22 @@ curl() {
  case " $* " in *' --ipv4 '*) ;; *) return 90 ;; esac
  case " $* " in *' --noproxy * '*) ;; *) return 91 ;; esac
  case " $* " in *' --proto =https '*) ;; *) return 92 ;; esac
- case " $* " in *' --max-time 8 '*) ;; *) return 93 ;; esac
+ case " $* " in *' --max-time 5 '*) ;; *) return 93 ;; esac
  case " $* " in *' --insecure '*|*' -k '*) return 94 ;; esac
  echo 204
 }
 [ "$(https_code https://www.youtube.com/generate_204)" = 204 ]
+`);
+shell('Site_Checker system profile uses range UA and low-speed guard',probe+`
+curl(){
+ case " $* " in *' --range 0-65535 '*) ;; *) return 91 ;; esac
+ case " $* " in *' --speed-time 3 --speed-limit 1 '*) ;; *) return 92 ;; esac
+ case " $* " in *' --connect-timeout 3 --max-time 5 '*) ;; *) return 93 ;; esac
+ case " $* " in *'Mozilla/5.0 (Windows NT 10.0; Win64; x64) curl/8.0'*) ;; *) return 94 ;; esac
+ case " $* " in *' --location --max-redirs 3 '*) ;; *) return 95 ;; esac
+ echo 200
+}
+[ "$(https_code https://www.youtube.com/)" = 200 ]
 `);
 const watchdog=read('files/watchdog.sh').split('case "${1:-}" in')[0]
  .replace('PATH=/usr/sbin:/usr/bin:/sbin:/bin','PATH="$PATH"')
@@ -85,7 +97,7 @@ cfg() {
  case "$1" in mode) echo "\${MODE:-safe}" ;; client_confirmed) echo "\${CONFIRM:-1}" ;; client_host) echo "\${HOST:-192.168.1.2}" ;; client_user) echo "\${USER_NAME:-watchdog}" ;; interval) echo "\${INTERVAL:-180}" ;; esac
 }
 `;
-shell('router-local failure always UNKNOWN',common+`
+shell('explicit monitor-only mode keeps recovery UNKNOWN',common+`
 LOCAL=YOUTUBE_DOWN
 run_probe
 [ "$result" = UNKNOWN ] && [ "$reason" = router_local_only ]
@@ -110,7 +122,7 @@ json_add_string(){ printf '%s=%s\\n' "$1" "$2"; }
 json_add_int(){ :; }; json_add_boolean(){ :; }; json_dump(){ :; }
 TEST_LOCAL=HEALTHY; TEST_STAMP=1000
 `;
-shell('scoped router display never authorizes recovery',statusFixture+`
+shell('scoped monitor-only display never authorizes recovery',statusFixture+`
 MODE=safe; LOCAL=HEALTHY; run_probe
 [ "$result" = UNKNOWN ]
 out=$(status)
@@ -209,12 +221,41 @@ run_probe() {
  [ "$step" -ne 3 ] || result="\${POST:-HEALTHY}"
 }
 `;
+function routerRecoveryTest(name,first,second,third,running,expected){
+shell(name,common+`
+MODE=router; ZAP='${zap}'; ZAP_RUNNING=${running}; export ZAP_RUNNING
+rm -f "$R/latched" "$R/restarts" "$TEST_TMP/restart-count" "$TEST_TMP/router-events" "$TEST_TMP/router-sleeps"
+echo 0 > "$TEST_TMP/router-probes"
+uptime_s(){ echo 5000; }
+sleep(){ echo "$1" >> "$TEST_TMP/router-sleeps"; }
+timeout(){ shift; "$@"; }
+event(){ echo "$*" >> "$TEST_TMP/router-events"; }
+mock_local_probe(){
+ n=$(cat "$TEST_TMP/router-probes"); n=$((n + 1)); echo "$n" > "$TEST_TMP/router-probes"
+ case "$n" in 1) echo ${first} ;; 2) echo ${second} ;; *) echo ${third} ;; esac
+}
+cycle
+if [ '${expected}' = yes ]; then
+ [ "$(wc -l < "$TEST_TMP/restart-count")" -eq 1 ]
+ grep -q '^30$' "$TEST_TMP/router-sleeps"
+ grep -q '^15$' "$TEST_TMP/router-sleeps"
+ grep -q 'restart confirmed_router_failure success' "$TEST_TMP/router-events"
+ grep -q 'control post_restart restored' "$TEST_TMP/router-events"
+else [ ! -e "$TEST_TMP/restart-count" ]; fi
+`);
+}
+routerRecoveryTest('real router decision path restarts after 30s and runs control','YOUTUBE_DOWN','YOUTUBE_DOWN','HEALTHY',1,'yes');
+routerRecoveryTest('router transient recovers during 30s confirmation','YOUTUBE_DOWN','HEALTHY','HEALTHY',1,'no');
+routerRecoveryTest('router DNS outage never restarts','DNS_DOWN','DNS_DOWN','DNS_DOWN',1,'no');
+routerRecoveryTest('router general internet outage never restarts','NETWORK_DOWN','NETWORK_DOWN','NETWORK_DOWN',1,'no');
+routerRecoveryTest('router unknown result never restarts','UNKNOWN','UNKNOWN','UNKNOWN',1,'no');
+routerRecoveryTest('router stopped Zapret2 stays stopped','YOUTUBE_DOWN','YOUTUBE_DOWN','HEALTHY',0,'no');
 shell('confirmed failure -> restart -> 15s control; hysteresis latch',cycleBase+`
 cycle
 [ "$(wc -l < "$TEST_TMP/restart-count")" -eq 1 ]
 grep -q 'restart confirmed_client_failure success' "$TEST_TMP/events"
 grep -q 'control post_restart restored' "$TEST_TMP/events"
-grep -q '^10$' "$TEST_TMP/sleeps"; grep -q '^15$' "$TEST_TMP/sleeps"
+grep -q '^30$' "$TEST_TMP/sleeps"; grep -q '^15$' "$TEST_TMP/sleeps"
 cycle
 [ "$(wc -l < "$TEST_TMP/restart-count")" -eq 1 ]
 `);

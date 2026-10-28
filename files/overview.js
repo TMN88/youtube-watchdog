@@ -95,12 +95,13 @@ return view.extend({
                 tile('Интервал', (s.interval || 180) % 60 ? String(s.interval) + ' сек' : String((s.interval || 180) / 60) + ' мин', 'cyan')
             ]));
             stateCard.appendChild(E('div', { 'class': 'youtube-watchdog-meta' }, 'Последняя проверка: ' + (s.checked_at || '—') + (s.checking ? ' • Проверка выполняется…' : '')));
-            var notice = s.reason === 'router_local_only'
-                ? 'Автовосстановление отключено: доступ с устройств LAN не подтверждён.'
-                : 'Проверяется доступность HTTPS с диагностического клиента. Воспроизведение видео не гарантируется.';
+            var notice = s.recovery_enabled
+                ? 'Автовосстановление включено. Подтверждённый отказ проверяется повторно через 30 секунд; перезапуск — с учётом лимитов.'
+                : 'Автовосстановление отключено.';
             if (s.reason === 'stale') notice = 'Данные устарели. Дождитесь новой проверки.';
             if (s.reason === 'client_not_configured' || s.reason === 'ssh_missing' || s.reason === 'invalid_client_user') notice = 'Диагностический клиент не настроен. Автоперезапуск запрещён.';
             if (s.reason === 'client_probe_unknown') notice = 'Нет достоверного ответа от диагностического клиента. Автоперезапуск запрещён.';
+            if (s.reason === 'router_probe_unknown') notice = 'Результат проверки неопределённый. Перезапуск не выполняется.';
             if (s.reason === 'client_general_network_or_dns' || s.reason === 'router_network_or_dns') notice = 'Ошибка сети или DNS. Автоперезапуск запрещён.';
             if (s.reason === 'configuration_changed' || s.reason === 'not_checked') notice = 'Ожидается достоверная проверка. Автоперезапуск пока запрещён.';
             stateCard.appendChild(E('div', { 'class': 'youtube-watchdog-meta' }, notice));
@@ -162,7 +163,7 @@ return view.extend({
                 var e;
                 try { e = JSON.parse(item.record); } catch (ignore) { return; }
                 var restart = e.type === 'restart', restored = e.status === 'restored';
-                var text = restart ? 'Перезапуск Zapret2 • подтверждён отказ YouTube • ' + (e.status === 'success' ? 'команда выполнена' : 'ошибка команды')
+                var text = restart ? 'Перезапуск Zapret2 • подтверждён отказ YouTube' + (e.reason === 'confirmed_router_failure' ? ' с роутера' : '') + ' • ' + (e.status === 'success' ? 'команда выполнена' : 'ошибка команды')
                     : restored ? 'YouTube восстановлен' : e.status === 'not_restored' ? 'YouTube не восстановлен' : 'Результат неизвестен';
                 var color = restart || e.status === 'unknown' ? 'warn' : restored ? 'ok' : 'bad';
                 events.appendChild(E('div', { 'class': 'youtube-watchdog-event' }, [

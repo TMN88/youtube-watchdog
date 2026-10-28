@@ -1,6 +1,6 @@
 #!/bin/sh
 set -eu
-VERSION=1.2.0
+VERSION=1.3.0
 BASE="https://raw.githubusercontent.com/TMN88/youtube-watchdog/9cce77186abd66d934105d0f502b07106005758a"
 fail() { echo "Ошибка: $*" >&2; exit 1; }
 [ "$(id -u)" = 0 ] || fail 'Запустите от root'
@@ -32,7 +32,7 @@ mkdir -p /tmp/youtube-watchdog
 exec 7>/tmp/youtube-watchdog/install.lock
 flock -n 7 || fail 'Установка уже выполняется'
 stage=$(mktemp -d /tmp/youtube-watchdog-install.XXXXXX)
-applying=0; success=0; was_running=0; was_enabled=0
+applying=0; success=0; was_running=0; was_enabled=0; config_created=0; migrating=0
 init=/etc/init.d/youtube-watchdog
 if [ -x "$init" ]; then
     "$init" running >/dev/null 2>&1 && was_running=1
@@ -48,6 +48,9 @@ cleanup() {
             [ -n "$src" ] || continue
             if [ -e "$stage/backup/$src" ]; then cp -p "$stage/backup/$src" "$dst"; else rm -f "$dst"; fi
         done < "$stage/map"
+        [ "$migrating" = 0 ] || uci -q revert youtube-watchdog.main.mode >/dev/null 2>&1 || true
+        if [ -f "$stage/config.before" ]; then cp -p "$stage/config.before" /etc/config/youtube-watchdog
+        elif [ "$config_created" = 1 ]; then rm -f /etc/config/youtube-watchdog; fi
         if [ "$was_enabled" = 1 ]; then "$init" enable || true; fi
         if [ "$was_running" = 1 ]; then "$init" start || true; fi
         /etc/init.d/rpcd restart >/dev/null 2>&1 || true
@@ -82,6 +85,7 @@ while IFS=' ' read -r src dst mode; do
     mkdir -p "$stage/backup/$(dirname "$src")"
     [ ! -e "$dst" ] || cp -p "$dst" "$stage/backup/$src"
 done < "$stage/map"
+[ ! -f /etc/config/youtube-watchdog ] || cp -p /etc/config/youtube-watchdog "$stage/config.before"
 applying=1
 [ ! -x "$init" ] || "$init" stop
 exec 9>/tmp/youtube-watchdog/operation.lock
@@ -96,8 +100,17 @@ done < "$stage/map"
 if [ ! -e /etc/config/youtube-watchdog ]; then
     cp "$stage/files/config" /etc/config/youtube-watchdog
     chmod 600 /etc/config/youtube-watchdog
+    config_created=1
 fi
 uci -q get youtube-watchdog.main >/dev/null || fail 'Не найдена UCI секция main'
+# Requested recovery policy: upgrade the former default monitor-only mode.
+# Preserve interval and all unrelated user options; rollback restores the file.
+case "$(uci -q get youtube-watchdog.main.mode 2>/dev/null || true)" in
+    ''|safe)
+        migrating=1
+        uci set youtube-watchdog.main.mode=router
+        uci commit youtube-watchdog ;;
+esac
 mkdir -p /etc/youtube-watchdog
 chmod 700 /etc/youtube-watchdog
 rm -f /tmp/luci-indexcache
@@ -113,7 +126,8 @@ sleep 2
 "$init" running >/dev/null 2>&1 || fail 'Служба не запустилась'
 success=1
 echo "YouTube Watchdog $VERSION установлен. Меню: Службы → YouTube Watchdog"
-echo 'По умолчанию: статус YouTube с роутера; безопасный режим без автоперезапуска. Доступ с устройств LAN отдельно не подтверждён.'
+echo 'Режим router: две проверки YouTube с роутера; повторный подтверждающий тест через 30 секунд, затем штатный restart работающего Zapret2.'
+echo 'При сбое интернета/DNS или неопределённом результате перезапуска нет. Лимиты: 1 попытка за 15 минут, максимум 3 за час.'
 echo 'Команды: youtube-watchdog check | status | logs'
 echo 'Удаление: sh /usr/libexec/youtube-watchdog-uninstall'
 /usr/bin/youtube-watchdog status

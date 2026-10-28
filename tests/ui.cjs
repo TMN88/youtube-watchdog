@@ -4,7 +4,7 @@ const root=path.resolve(__dirname,'..');
 const source=fs.readFileSync(path.join(root,'files/overview.js'),'utf8');
 const shim=`
 window.writeAllowed=true;window.calls=[];window.polls=[];window.failInterval=false;
-var state={running:true,enabled:true,zapret_running:true,youtube:'HEALTHY',youtube_scope:'router',client_youtube:'UNKNOWN',local_probe:'HEALTHY',reason:'router_local_only',interval:180,checked_at:'2026-10-28 10:00:00 +0300'};
+var state={running:true,enabled:true,zapret_running:true,youtube:'HEALTHY',youtube_scope:'router',client_youtube:'UNKNOWN',local_probe:'HEALTHY',recovery_enabled:true,reason:'router_https_reachable',interval:180,checked_at:'2026-10-28 10:00:00 +0300'};
 var entries={events:[]};
 var E=function(tag,attrs,children){var e=document.createElement(tag);Object.keys(attrs||{}).forEach(function(k){e.setAttribute(k,attrs[k])});if(children!=null)(Array.isArray(children)?children:[children]).forEach(function(c){e.appendChild(c instanceof Node?c:document.createTextNode(String(c)))});return e};
 var L={hasViewPermission:function(){return window.writeAllowed}},ui={},poll={add:function(f){window.polls.push(f)}},view={extend:function(v){return v}},rpc={declare:function(o){return function(minutes){
@@ -32,6 +32,7 @@ fs.writeFileSync(path.join(root,'preview.html'),html);
  await input.waitFor();assert.equal(await input.inputValue(),'3');
  assert(await page.getByText('YouTube · роутер',{exact:true}).isVisible());
  assert(await page.getByText('Доступен',{exact:true}).isVisible());
+ assert(await page.getByText('Автовосстановление включено.',{exact:false}).isVisible());
  assert.equal(await page.getByText('Проверка с роутера:',{exact:false}).count(),0);
  assert.deepEqual(await input.locator('option').evaluateAll(a=>a.map(x=>x.value)),['1','3','5','7','10','15','20','30']);
  await page.screenshot({path:path.join(root,'preview-desktop.png'),fullPage:true});

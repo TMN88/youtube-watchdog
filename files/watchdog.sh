@@ -39,6 +39,15 @@ valid_host() {
 run_probe() {
     local_result=$("$PROBE") || local_result=UNKNOWN
     result=UNKNOWN; reason=router_local_only
+    case "$(cfg mode)" in router|'')
+        case "$local_result" in
+            HEALTHY) result=HEALTHY; reason=router_https_reachable ;;
+            YOUTUBE_DOWN) result=YOUTUBE_DOWN; reason=router_youtube_transport_failure ;;
+            DNS_DOWN|NETWORK_DOWN) reason=router_network_or_dns ;;
+            *) reason=router_probe_unknown ;;
+        esac
+        write_state; return ;;
+    esac
     if [ "$(cfg mode)" = ssh ] && [ "$(cfg client_confirmed)" = 1 ]; then
         host=$(cfg client_host); user=$(cfg client_user)
         case "$user" in ''|*[!a-zA-Z0-9_-]*) reason=invalid_client_user; write_state; return ;; esac
@@ -81,7 +90,7 @@ cycle() {
     [ "$result" = YOUTUBE_DOWN ] || return 0
     # Rearm only after two consecutive healthy daemon checks.
     [ ! -e "$R/latched" ] || return 0
-    sleep 10
+    sleep 30
     run_probe || { result=UNKNOWN; return 1; }
     [ "$result" = YOUTUBE_DOWN ] || return 0
     [ -x "$ZAP" ] && "$ZAP" running >/dev/null 2>&1 || return 0
@@ -89,10 +98,12 @@ cycle() {
     # Charge attempts before invoking restart, including failed commands.
     uptime_s >> "$R/restarts" || return 1
     : > "$R/latched" || return 1
+    restart_reason=confirmed_client_failure
+    case "$(cfg mode)" in router|'') restart_reason=confirmed_router_failure ;; esac
     if timeout 40 "$ZAP" restart >/dev/null 2>&1; then
-        event restart confirmed_client_failure success
+        event restart "$restart_reason" success
     else
-        event restart confirmed_client_failure failed
+        event restart "$restart_reason" failed
     fi
     sleep 15
     run_probe || result=UNKNOWN
@@ -132,20 +143,20 @@ status() {
             if [ "$now" -lt "$stamp" ] || [ $((now - stamp)) -gt $(( $(interval) + 180 )) ]; then saved=UNKNOWN; local_saved=UNKNOWN; why=stale; fi ;; esac
     fi
     # Changed/disabled client configuration invalidates previous availability.
-    scope=lan; displayed="$saved"
+    scope=lan; displayed="$saved"; client_saved="$saved"; recovery=1
     if [ "$(cfg mode)" != ssh ] || [ "$(cfg client_confirmed)" != 1 ]; then
-        saved=UNKNOWN; scope=router
+        client_saved=UNKNOWN; scope=router
         case "$local_saved" in HEALTHY|YOUTUBE_DOWN|DNS_DOWN|NETWORK_DOWN) displayed="$local_saved" ;; *) displayed=UNKNOWN ;; esac
-        [ "$why" = stale ] || why=router_local_only
+        case "$(cfg mode)" in router|'') ;; *) recovery=0; [ "$why" = stale ] || why=router_local_only ;; esac
     fi
     json_init
     if "$INIT" running >/dev/null 2>&1; then json_add_boolean running 1; else json_add_boolean running 0; fi
     if "$INIT" enabled >/dev/null 2>&1; then json_add_boolean enabled 1; else json_add_boolean enabled 0; fi
     if [ -x "$ZAP" ] && "$ZAP" running >/dev/null 2>&1; then json_add_boolean zapret_running 1; else json_add_boolean zapret_running 0; fi
-    # Display is explicitly scoped. Recovery always uses run_probe/state.json,
-    # never this router-local presentation value.
+    # Display is scoped; cycle() uses the confirmed probe decision, not UI state.
     json_add_string youtube "$displayed"; json_add_string youtube_scope "$scope"
-    json_add_string client_youtube "$saved"; json_add_string local_probe "$local_saved"
+    json_add_string client_youtube "$client_saved"; json_add_string local_probe "$local_saved"
+    json_add_boolean recovery_enabled "$recovery"
     json_add_string reason "$why"; json_add_string checked_at "$checked"
     json_add_int interval "$(interval)"
     if flock -n "$R/operation.lock" true 2>/dev/null; then json_add_boolean checking 0; else json_add_boolean checking 1; fi
@@ -158,7 +169,7 @@ logs() {
     while IFS='|' read -r kind at cause outcome extra; do
         [ -z "$extra" ] || continue
         case "$kind:$cause:$outcome" in
-            restart:confirmed_client_failure:success|restart:confirmed_client_failure:failed|control:post_restart:restored|control:post_restart:not_restored|control:post_restart:unknown) ;;
+            restart:confirmed_client_failure:success|restart:confirmed_client_failure:failed|restart:confirmed_router_failure:success|restart:confirmed_router_failure:failed|control:post_restart:restored|control:post_restart:not_restored|control:post_restart:unknown) ;;
             *) continue ;;
         esac
         # The pipeline subshell emits each object independently into a RAM stream.

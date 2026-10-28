@@ -1,5 +1,5 @@
 config watchdog 'main'
-	option mode 'safe'
+	option mode 'router'
 	option interval '180'
 	# SSH mode requires a separate wired/Wi-Fi LAN client using this router.
 	option client_host ''
