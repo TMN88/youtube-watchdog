@@ -39,11 +39,9 @@ uci(){
  assert.equal(fs.existsSync(path.join(runtime,'interval.changed')),changed,name+' notification');
  console.log('PASS '+name);count++;
 }
-run('save-five-minutes',{minutes:5},true);
-run('minimum-three-minutes',{minutes:3},true,{current:300});
-run('maximum-1440-minutes',{minutes:1440},true);
+for(const minutes of [1,3,5,7,10,15,20,30])run('preset-'+minutes,{minutes},true,{current:minutes===3?300:180});
 run('same-value-no-flash-write',{minutes:3},true,{noWrite:true});
-for(const [name,value] of [['below-minimum',2],['above-maximum',1441],['fraction',3.5],['negative',-3],['string-number','5'],['shell-injection','3; touch /tmp/pwn'],['missing',undefined],['null',null],['overflow',1e20]])run(name,{minutes:value},false);
+for(const [name,value] of [['not-a-preset',2],['old-custom-value',9],['above-maximum',1440],['fraction',3.5],['negative',-3],['string-number','5'],['shell-injection','3; touch /tmp/pwn'],['missing',undefined],['null',null],['overflow',1e20]])run(name,{minutes:value},false);
 run('commit-failure-reported',{minutes:5},false,{commitFailure:true});
 console.log(count+' settings RPC fixture checks passed.');
 fs.rmSync(tmp,{recursive:true,force:true});

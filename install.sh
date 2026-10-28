@@ -1,6 +1,6 @@
 #!/bin/sh
 set -eu
-VERSION=1.1.0
+VERSION=1.2.0
 BASE="https://raw.githubusercontent.com/TMN88/youtube-watchdog/1578abb17dec69bfb841fc8ea5888bfa61545126"
 fail() { echo "Ошибка: $*" >&2; exit 1; }
 [ "$(id -u)" = 0 ] || fail 'Запустите от root'
@@ -113,7 +113,7 @@ sleep 2
 "$init" running >/dev/null 2>&1 || fail 'Служба не запустилась'
 success=1
 echo "YouTube Watchdog $VERSION установлен. Меню: Службы → YouTube Watchdog"
-echo 'По умолчанию: безопасный режим, клиентский путь UNKNOWN, без автоперезапуска.'
+echo 'По умолчанию: статус YouTube с роутера; безопасный режим без автоперезапуска. Доступ с устройств LAN отдельно не подтверждён.'
 echo 'Команды: youtube-watchdog check | status | logs'
 echo 'Удаление: sh /usr/libexec/youtube-watchdog-uninstall'
 /usr/bin/youtube-watchdog status

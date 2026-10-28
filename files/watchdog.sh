@@ -13,7 +13,7 @@ uptime_s() { cut -d. -f1 /proc/uptime; }
 interval() {
     n=$(cfg interval)
     case "$n" in ''|*[!0-9]*) n=180 ;; esac
-    [ "$n" -ge 180 ] 2>/dev/null && [ "$n" -le 86400 ] 2>/dev/null || n=180
+    [ "$n" -ge 60 ] 2>/dev/null && [ "$n" -le 86400 ] 2>/dev/null || n=180
     echo "$n"
 }
 lock() {
@@ -128,16 +128,24 @@ status() {
         if [ "$configuration" != "$current" ]; then saved=UNKNOWN; why=configuration_changed; fi
         json_get_var stamp checked_uptime
         now=$(uptime_s)
-        case "$stamp" in ''|*[!0-9]*) saved=UNKNOWN; why=stale ;; *)
-            if [ "$now" -lt "$stamp" ] || [ $((now - stamp)) -gt $(( $(interval) + 180 )) ]; then saved=UNKNOWN; why=stale; fi ;; esac
+        case "$stamp" in ''|*[!0-9]*) saved=UNKNOWN; local_saved=UNKNOWN; why=stale ;; *)
+            if [ "$now" -lt "$stamp" ] || [ $((now - stamp)) -gt $(( $(interval) + 180 )) ]; then saved=UNKNOWN; local_saved=UNKNOWN; why=stale; fi ;; esac
     fi
     # Changed/disabled client configuration invalidates previous availability.
-    if [ "$(cfg mode)" != ssh ] || [ "$(cfg client_confirmed)" != 1 ]; then saved=UNKNOWN; why=router_local_only; fi
+    scope=lan; displayed="$saved"
+    if [ "$(cfg mode)" != ssh ] || [ "$(cfg client_confirmed)" != 1 ]; then
+        saved=UNKNOWN; scope=router
+        case "$local_saved" in HEALTHY|YOUTUBE_DOWN|DNS_DOWN|NETWORK_DOWN) displayed="$local_saved" ;; *) displayed=UNKNOWN ;; esac
+        [ "$why" = stale ] || why=router_local_only
+    fi
     json_init
     if "$INIT" running >/dev/null 2>&1; then json_add_boolean running 1; else json_add_boolean running 0; fi
     if "$INIT" enabled >/dev/null 2>&1; then json_add_boolean enabled 1; else json_add_boolean enabled 0; fi
     if [ -x "$ZAP" ] && "$ZAP" running >/dev/null 2>&1; then json_add_boolean zapret_running 1; else json_add_boolean zapret_running 0; fi
-    json_add_string youtube "$saved"; json_add_string local_probe "$local_saved"
+    # Display is explicitly scoped. Recovery always uses run_probe/state.json,
+    # never this router-local presentation value.
+    json_add_string youtube "$displayed"; json_add_string youtube_scope "$scope"
+    json_add_string client_youtube "$saved"; json_add_string local_probe "$local_saved"
     json_add_string reason "$why"; json_add_string checked_at "$checked"
     json_add_int interval "$(interval)"
     if flock -n "$R/operation.lock" true 2>/dev/null; then json_add_boolean checking 0; else json_add_boolean checking 1; fi

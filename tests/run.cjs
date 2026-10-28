@@ -90,8 +90,51 @@ LOCAL=YOUTUBE_DOWN
 run_probe
 [ "$result" = UNKNOWN ] && [ "$reason" = router_local_only ]
 `);
-shell('interval cannot weaken 180 second floor',common+`
+const statusFixture=common+`
+printf '{}' > "$R/state.json"
+uci(){ echo fixture; }
+uptime_s(){ echo 1000; }
+json_load(){ :; }
+json_get_var(){
+ case "$2" in
+ youtube) saved=YOUTUBE_DOWN ;;
+ local_probe) local_saved="$TEST_LOCAL" ;;
+ reason) why=client_youtube_transport_failure ;;
+ checked_at) checked=fixture-time ;;
+ checked_uptime) stamp="$TEST_STAMP" ;;
+ configuration) configuration=$(uci -q show youtube-watchdog | sha256sum | cut -d' ' -f1) ;;
+ esac
+}
+json_init(){ :; }
+json_add_string(){ printf '%s=%s\\n' "$1" "$2"; }
+json_add_int(){ :; }; json_add_boolean(){ :; }; json_dump(){ :; }
+TEST_LOCAL=HEALTHY; TEST_STAMP=1000
+`;
+shell('scoped router display never authorizes recovery',statusFixture+`
+MODE=safe; LOCAL=HEALTHY; run_probe
+[ "$result" = UNKNOWN ]
+out=$(status)
+printf '%s\\n' "$out" | grep -qx 'youtube=HEALTHY'
+printf '%s\\n' "$out" | grep -qx 'youtube_scope=router'
+printf '%s\\n' "$out" | grep -qx 'client_youtube=UNKNOWN'
+`);
+shell('stale router measurement cannot display available',statusFixture+`
+TEST_STAMP=0; out=$(status)
+printf '%s\\n' "$out" | grep -qx 'youtube=UNKNOWN'
+printf '%s\\n' "$out" | grep -qx 'reason=stale'
+`);
+shell('LAN display does not fall back to healthy router',statusFixture+`
+MODE=ssh; out=$(status)
+printf '%s\\n' "$out" | grep -qx 'youtube=YOUTUBE_DOWN'
+printf '%s\\n' "$out" | grep -qx 'youtube_scope=lan'
+`);
+shell('router DNS error is shown as an error',statusFixture+`
+TEST_LOCAL=DNS_DOWN; out=$(status)
+printf '%s\\n' "$out" | grep -qx 'youtube=DNS_DOWN'
+`);
+shell('interval supports one minute and bounds malformed values',common+`
 INTERVAL=1; [ "$(interval)" = 180 ]
+INTERVAL=60; [ "$(interval)" = 60 ]
 INTERVAL=garbage; [ "$(interval)" = 180 ]
 INTERVAL=300; [ "$(interval)" = 300 ]
 `);
