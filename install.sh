@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 VERSION=1.3.0
-BASE="https://raw.githubusercontent.com/TMN88/youtube-watchdog/9cce77186abd66d934105d0f502b07106005758a"
+BASE="https://raw.githubusercontent.com/TMN88/youtube-watchdog/2bb120153407af7f1b787c78c7432ab5783c1358"
 fail() { echo "Ошибка: $*" >&2; exit 1; }
 [ "$(id -u)" = 0 ] || fail 'Запустите от root'
 [ -r /etc/openwrt_release ] || fail 'Требуется OpenWrt'
