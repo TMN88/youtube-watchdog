@@ -158,14 +158,16 @@ case "${1:-}" in
         # Worker inherits operation flock; stopping the parent cannot admit overlap.
         healthy=0
         while :; do
-            "$0" cycle & child=$!; wait "$child"; child=''
-            if [ -r "$R/state.json" ]; then
+            "$0" cycle & child=$!; wait "$child"; cycle_rc=$?; child=''
+            if [ "$cycle_rc" -eq 0 ] && [ -r "$R/state.json" ]; then
                 json_load "$(cat "$R/state.json")"; json_get_var s youtube
                 rearm "$s"
+            else
+                healthy=0
             fi
             sleep "$(interval)" & child=$!; wait "$child"; child=''
         done ;;
-    cycle) lock || exit 0; cycle ;;
+    cycle) lock || exit 75; cycle ;;
     check) lock || { echo 'Проверка уже выполняется' >&2; exit 1; }; run_probe; status ;;
     status) status ;;
     logs) logs ;;
