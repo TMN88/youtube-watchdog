@@ -20,7 +20,7 @@ rm -f /usr/bin/youtube-watchdog /usr/libexec/youtube-watchdog-probe \
 rmdir /www/luci-static/resources/view/youtube-watchdog 2>/dev/null || true
 # Manually provisioned SSH credentials are retained to avoid deleting user keys.
 rmdir /etc/youtube-watchdog 2>/dev/null || true
-rm -f /tmp/youtube-watchdog/state.json /tmp/youtube-watchdog/latched /tmp/youtube-watchdog/restarts
+rm -f /tmp/youtube-watchdog/state.json /tmp/youtube-watchdog/latched /tmp/youtube-watchdog/restarts /tmp/youtube-watchdog/interval.changed
 rm -f /tmp/luci-indexcache
 rm -rf /tmp/luci-modulecache
 /etc/init.d/rpcd restart

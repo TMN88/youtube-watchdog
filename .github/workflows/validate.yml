@@ -12,4 +12,5 @@ jobs:
           node-version: '22'
       - run: node tests/run.cjs
       - run: node tests/install.cjs
+      - run: node tests/settings.cjs
       - run: sha256sum -c SHA256SUMS

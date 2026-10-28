@@ -1,10 +1,10 @@
 #!/bin/sh
 . /usr/share/libubox/jshn.sh
-reply() { json_init; json_add_boolean ok "$1"; json_dump; }
+reply() { json_init; json_add_boolean ok "$1"; [ -z "${2:-}" ] || json_add_string message "$2"; json_dump; }
 case "$1" in
-    list) echo '{"status":{},"logs":{},"start":{},"stop":{},"restart":{},"enable":{},"disable":{},"check":{}}' ;;
+    list) echo '{"status":{},"logs":{},"start":{},"stop":{},"restart":{},"enable":{},"disable":{},"check":{},"set_interval":{"minutes":0}}' ;;
     call)
-        # Drain bounded rpcd input. No user-provided command, path or arguments.
+        # Only fixed actions and a validated integer interval are accepted.
         read -r input
         case "$2" in
             status|logs) exec /usr/bin/youtube-watchdog "$2" ;;
@@ -15,6 +15,26 @@ case "$1" in
                 if ! flock -n /tmp/youtube-watchdog/operation.lock true 2>/dev/null; then reply 0; exit 0; fi
                 /usr/bin/youtube-watchdog check </dev/null >/dev/null 2>&1 &
                 reply 1 ;;
+            set_interval)
+                json_load "$input" || { reply 0 'Некорректный запрос'; exit 0; }
+                json_get_type value_type minutes
+                json_get_var minutes minutes
+                if [ "$value_type" != int ]; then reply 0 'Укажите целое число минут от 3 до 1440'; exit 0; fi
+                case "$minutes" in ''|*[!0-9]*) reply 0 'Укажите целое число минут от 3 до 1440'; exit 0 ;; esac
+                if [ "${#minutes}" -gt 4 ] || [ "$minutes" -lt 3 ] || [ "$minutes" -gt 1440 ]; then
+                    reply 0 'Допустимый интервал: от 3 до 1440 минут'; exit 0
+                fi
+                mkdir -p /tmp/youtube-watchdog || { reply 0 'Не удалось сохранить настройки'; exit 0; }
+                exec 7>/tmp/youtube-watchdog/settings.lock
+                flock -n 7 || { reply 0 'Настройки уже сохраняются'; exit 0; }
+                seconds=$((minutes * 60))
+                if ! uci -q get youtube-watchdog.main >/dev/null 2>&1; then reply 0 'Не найдена конфигурация Watchdog'; exit 0; fi
+                if [ "$(uci -q get youtube-watchdog.main.interval 2>/dev/null)" = "$seconds" ]; then reply 1; exit 0; fi
+                if uci set "youtube-watchdog.main.interval=$seconds" && uci commit youtube-watchdog; then
+                    if touch /tmp/youtube-watchdog/interval.changed; then reply 1; else reply 0 'Интервал сохранён; не удалось уведомить службу'; fi
+                else
+                    reply 0 'Не удалось сохранить интервал'
+                fi ;;
             *) exit 1 ;;
         esac ;;
     *) exit 1 ;;

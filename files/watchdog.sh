@@ -103,6 +103,20 @@ rearm() {
     if [ "$1" = HEALTHY ]; then healthy=$((healthy + 1)); else healthy=0; fi
     [ "$healthy" -lt 2 ] || rm -f "$R/latched"
 }
+wait_interval() {
+    elapsed=0
+    desired=$(interval)
+    while [ "$elapsed" -lt "$desired" ]; do
+        delay=$((desired - elapsed))
+        [ "$delay" -le 5 ] || delay=5
+        sleep "$delay" & child=$!; wait "$child"; child=''
+        elapsed=$((elapsed + delay))
+        if [ -e "$R/interval.changed" ]; then
+            rm -f "$R/interval.changed"
+            desired=$(interval)
+        fi
+    done
+}
 status() {
     saved=UNKNOWN; local_saved=UNKNOWN; why=not_checked; checked='—'
     if [ -r "$R/state.json" ]; then
@@ -165,7 +179,7 @@ case "${1:-}" in
             else
                 healthy=0
             fi
-            sleep "$(interval)" & child=$!; wait "$child"; child=''
+            wait_interval
         done ;;
     cycle) lock || exit 75; cycle ;;
     check) lock || { echo 'Проверка уже выполняется' >&2; exit 1; }; run_probe; status ;;

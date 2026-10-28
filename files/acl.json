@@ -2,6 +2,6 @@
   "luci-app-youtube-watchdog": {
     "description": "YouTube Watchdog: status and fixed service actions",
     "read": { "ubus": { "youtube-watchdog": ["status", "logs"] } },
-    "write": { "ubus": { "youtube-watchdog": ["start", "stop", "restart", "check", "enable", "disable"] } }
+    "write": { "ubus": { "youtube-watchdog": ["start", "stop", "restart", "check", "enable", "disable", "set_interval"] } }
   }
 }

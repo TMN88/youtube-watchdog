@@ -28,7 +28,7 @@ for (const file of ['install.sh','uninstall.sh','files/probe.sh','files/watchdog
 new vm.Script('(function(){'+read('files/overview.js')+'})'); count++;
 const acl=JSON.parse(read('files/acl.json'))['luci-app-youtube-watchdog'];
 assert.deepEqual(acl.read.ubus['youtube-watchdog'],['status','logs']);
-assert.deepEqual(acl.write.ubus['youtube-watchdog'],['start','stop','restart','check','enable','disable']);
+assert.deepEqual(acl.write.ubus['youtube-watchdog'],['start','stop','restart','check','enable','disable','set_interval']);
 assert(!JSON.stringify(acl).includes('file')); count++;
 const menu=JSON.parse(read('files/menu.json'));
 assert.equal(menu['admin/services/youtube-watchdog'].action.path,'youtube-watchdog/overview'); count++;
@@ -199,6 +199,22 @@ rearm HEALTHY; [ -f "$R/latched" ]
 rearm UNKNOWN; rearm HEALTHY; [ -f "$R/latched" ]
 rearm HEALTHY; [ ! -f "$R/latched" ]
 `);
+function schedulerTest(name,initial,changeAt,next,expected){
+ shell(name,common+`
+rm -f "$R/interval.changed" "$R/sleep-count"
+echo ${initial} > "$R/interval-fixture"
+interval(){ cat "$R/interval-fixture"; }
+sleep(){
+ c=0; [ ! -f "$R/sleep-count" ] || c=$(cat "$R/sleep-count")
+ c=$((c + 1)); echo "$c" > "$R/sleep-count"
+ if [ "$c" -eq ${changeAt} ]; then echo ${next} > "$R/interval-fixture"; touch "$R/interval.changed"; fi
+}
+child=''; wait_interval
+[ "$(cat "$R/sleep-count")" -eq ${expected} ]
+`);
+}
+schedulerTest('shorter interval applies during existing wait',600,40,180,40);
+schedulerTest('longer interval extends existing wait',180,2,300,60);
 shell('missing runtime state cannot authorize recovery',cycleBase+`
 run_probe() { result=YOUTUBE_DOWN; return 1; }
 cycle && exit 1

@@ -6,6 +6,7 @@
 
 var statusCall = rpc.declare({ object: 'youtube-watchdog', method: 'status', expect: {} });
 var logsCall = rpc.declare({ object: 'youtube-watchdog', method: 'logs', expect: {} });
+var setIntervalCall = rpc.declare({ object: 'youtube-watchdog', method: 'set_interval', params: ['minutes'], expect: {} });
 var actions = {};
 ['start', 'stop', 'restart', 'enable', 'disable', 'check'].forEach(function(name) {
     actions[name] = rpc.declare({ object: 'youtube-watchdog', method: name, expect: {} });
@@ -33,6 +34,9 @@ var css = `
 .youtube-watchdog-icon{font-size:18px}.youtube-watchdog-time{color:#A4B3D4;font-size:11px}
 .youtube-watchdog-footer{text-align:center;color:#A4B3D4;font-size:10px;letter-spacing:2px;padding:5px}
 .youtube-watchdog-error{color:#FF657F;margin-top:12px;font-size:13px}
+.youtube-watchdog-root .youtube-watchdog-input{background:#0B1428;color:#EAF4FF;border:1px solid #65E9FF66;border-radius:9px;padding:10px;width:120px;min-height:44px;font:inherit}
+.youtube-watchdog-root .youtube-watchdog-input:focus{outline:2px solid #65E9FF;outline-offset:2px}
+.youtube-watchdog-root .youtube-watchdog-input:disabled{opacity:.5}
 @media(max-width:480px){.youtube-watchdog-root{padding:10px;margin:5px 0}.youtube-watchdog-card{padding:13px}.youtube-watchdog-title{font-size:21px}.youtube-watchdog-tile{padding:11px}.youtube-watchdog-value{font-size:14px}.youtube-watchdog-grid{gap:8px}}
 `;
 return view.extend({
@@ -46,7 +50,11 @@ return view.extend({
         var journal = E('div', { 'class': 'youtube-watchdog-card' });
         var error = E('div', { 'class': 'youtube-watchdog-error', 'role': 'alert' });
         var buttons = [];
-        function disable(value) { buttons.forEach(function(b) { b.disabled = value || (!canWrite && b.dataset.write === '1'); }); }
+        var settingsControls = [];
+        function disable(value) {
+            buttons.forEach(function(b) { b.disabled = value || (!canWrite && b.dataset.write === '1'); });
+            settingsControls.forEach(function(b) { b.disabled = busy || !canWrite; });
+        }
         function button(text, color, action) {
             var b = E('button', { 'class': 'youtube-watchdog-button youtube-watchdog-' + color, 'type': 'button' }, text);
             b.dataset.write = action === 'refresh' ? '0' : '1';
@@ -56,7 +64,7 @@ return view.extend({
                 Promise.resolve().then(function() {
                     return action === 'refresh' ? null : actions[action]();
                 }).then(function(result) {
-                    if (result && !result.ok) throw new Error('Действие не выполнено. Возможно, уже идёт проверка.');
+                    if (result && !result.ok) throw new Error(result.message || 'Действие не выполнено. Возможно, уже идёт проверка.');
                     // check is queued server-side; all measurements remain in the backend.
                     return refresh();
                 }).catch(function(e) {
@@ -81,9 +89,11 @@ return view.extend({
                 tile('Watchdog', s.running ? 'Работает' : 'Остановлен', s.running ? 'ok' : 'bad'),
                 tile('YouTube', yt, y === 'HEALTHY' ? 'ok' : y === 'YOUTUBE_DOWN' ? 'bad' : 'warn'),
                 tile('Zapret2', s.zapret_running ? 'Работает' : 'Остановлен', s.zapret_running ? 'ok' : 'bad'),
-                tile('Интервал', String(Math.round((s.interval || 180) / 60)) + ' мин', 'cyan')
+                tile('Интервал', (s.interval || 180) % 60 ? String(s.interval) + ' сек' : String((s.interval || 180) / 60) + ' мин', 'cyan')
             ]));
             stateCard.appendChild(E('div', { 'class': 'youtube-watchdog-meta' }, 'Последняя проверка: ' + (s.checked_at || '—') + (s.checking ? ' • Проверка выполняется…' : '')));
+            var localText = { HEALTHY: 'доступен', YOUTUBE_DOWN: 'недоступен', DNS_DOWN: 'ошибка DNS', NETWORK_DOWN: 'ошибка сети', UNKNOWN: 'нет достоверного результата' };
+            stateCard.appendChild(E('div', { 'class': 'youtube-watchdog-meta' }, 'Проверка с роутера: ' + (localText[s.local_probe] || 'нет достоверного результата')));
             var notice = s.reason === 'router_local_only'
                 ? 'Безопасный режим: проверка с роутера не подтверждает путь LAN-клиентов. Автоперезапуск запрещён.'
                 : 'Проверяется доступность HTTPS с диагностического клиента. Воспроизведение видео не гарантируется.';
@@ -105,6 +115,36 @@ return view.extend({
         var events = E('div');
         journal.appendChild(E('div', { 'class': 'youtube-watchdog-row' }, [E('span', { 'class': 'youtube-watchdog-heading' }, 'Журнал событий'), button('Обновить', 'cyan', 'refresh')]));
         journal.appendChild(events);
+        var dirtyInterval = false;
+        var intervalInput = E('input', { 'class': 'youtube-watchdog-input', 'id': 'youtube-watchdog-interval', 'type': 'number', 'min': '3', 'max': '1440', 'step': '1', 'inputmode': 'numeric', 'aria-describedby': 'youtube-watchdog-interval-help' });
+        intervalInput.value = String(Math.ceil((data[0].interval || 180) / 60));
+        var intervalNotice = E('div', { 'class': 'youtube-watchdog-meta', 'aria-live': 'polite' });
+        intervalInput.oninput = function() { dirtyInterval = true; intervalNotice.textContent = ''; };
+        var saveInterval = E('button', { 'class': 'youtube-watchdog-button youtube-watchdog-cyan', 'type': 'button' }, 'Сохранить интервал');
+        saveInterval.onclick = function() {
+            if (busy || !canWrite) return;
+            var raw = intervalInput.value.trim(), minutes = Number(raw);
+            if (!/^[0-9]+$/.test(raw) || minutes < 3 || minutes > 1440) {
+                intervalNotice.textContent = 'Укажите целое число минут от 3 до 1440.'; return;
+            }
+            busy = true; disable(true); error.textContent = ''; intervalNotice.textContent = 'Сохранение…';
+            Promise.resolve().then(function() { return setIntervalCall(minutes); }).then(function(result) {
+                if (!result.ok) throw new Error(result.message || 'Не удалось сохранить интервал');
+                dirtyInterval = false;
+                intervalNotice.textContent = 'Интервал сохранён: ' + minutes + ' мин. Применяется автоматически, без перезапуска службы.';
+                return refresh();
+            }).catch(function(e) { intervalNotice.textContent = e.message || String(e); }).finally(function() {
+                busy = false; disable(serverBusy);
+            });
+        };
+        settingsControls.push(intervalInput, saveInterval);
+        var settings = E('div', { 'class': 'youtube-watchdog-card' }, [
+            E('div', { 'class': 'youtube-watchdog-heading' }, 'Частота проверки'),
+            E('div', { 'class': 'youtube-watchdog-row', 'style': 'margin-top:14px' }, [
+                E('label', { 'for': 'youtube-watchdog-interval', 'class': 'youtube-watchdog-label' }, 'Интервал, минут'), intervalInput, saveInterval
+            ]),
+            E('div', { 'class': 'youtube-watchdog-meta', 'id': 'youtube-watchdog-interval-help' }, 'От 3 до 1440 минут. По умолчанию — 3 минуты. Лимиты перезапуска Zapret2 сохраняются.'), intervalNotice
+        ]);
         function drawLogs(l) {
             events.textContent = '';
             (l.events || []).forEach(function(item) {
@@ -122,10 +162,14 @@ return view.extend({
             if (!events.childNodes.length) events.appendChild(E('div', { 'class': 'youtube-watchdog-meta' }, 'Перезапусков и контрольных тестов пока нет.'));
         }
         function refresh() {
-            return Promise.all([statusCall(), logsCall()]).then(function(d) { drawStatus(d[0]); drawLogs(d[1]); disable(busy || !!d[0].checking); });
+            return Promise.all([statusCall(), logsCall()]).then(function(d) {
+                drawStatus(d[0]); drawLogs(d[1]);
+                if (!dirtyInterval && document.activeElement !== intervalInput) intervalInput.value = String(Math.ceil((d[0].interval || 180) / 60));
+                disable(busy || !!d[0].checking);
+            });
         }
         drawStatus(data[0]); drawLogs(data[1]); disable(serverBusy);
-        root.appendChild(stateCard); root.appendChild(journal); root.appendChild(error);
+        root.appendChild(stateCard); root.appendChild(settings); root.appendChild(journal); root.appendChild(error);
         root.appendChild(E('div', { 'class': 'youtube-watchdog-footer' }, 'YOUTUBE WATCHDOG • TMN88'));
         poll.add(function() { if (!busy) return refresh().catch(function(e) { error.textContent = 'Ошибка обновления: ' + e.message; }); }, 5);
         return root;
