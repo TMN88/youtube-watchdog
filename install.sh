@@ -1,13 +1,13 @@
 #!/bin/sh
 set -eu
-VERSION=1.0.0
+VERSION=1.0.1
 BASE="https://raw.githubusercontent.com/TMN88/youtube-watchdog/b08400e412d29f731b746a002ec55e6efecc0446"
 fail() { echo "Ошибка: $*" >&2; exit 1; }
 [ "$(id -u)" = 0 ] || fail 'Запустите от root'
 [ -r /etc/openwrt_release ] || fail 'Требуется OpenWrt'
 . /etc/openwrt_release
 case "${DISTRIB_RELEASE:-}" in 24.10.*|25.12.*) ;; *) fail 'Поддерживаются OpenWrt 24.10.x и 25.12.x' ;; esac
-for cmd in uci ubus timeout nslookup sha256sum jsonfilter; do command -v "$cmd" >/dev/null || fail "Не найдена команда $cmd"; done
+for cmd in uci ubus nslookup sha256sum jsonfilter; do command -v "$cmd" >/dev/null || fail "Не найдена команда $cmd"; done
 if command -v apk >/dev/null 2>&1; then pm=apk
 elif command -v opkg >/dev/null 2>&1; then pm=opkg
 else fail 'Не найден apk/opkg'; fi
@@ -17,11 +17,15 @@ installed() {
 }
 missing=''
 for pkg in curl ca-bundle flock rpcd luci-base; do installed "$pkg" || missing="$missing $pkg"; done
+# Some OpenWrt builds omit the BusyBox timeout applet. Install its small
+# standalone replacement before checking runtime tools or changing service files.
+command -v timeout >/dev/null 2>&1 || missing="$missing coreutils-timeout"
 if [ -n "$missing" ]; then
     if [ "$pm" = apk ]; then apk update && apk add $missing || fail 'Не установлены зависимости'
     else opkg update && opkg install $missing || fail 'Не установлены зависимости'; fi
 fi
 command -v flock >/dev/null || fail 'Не установлен flock'
+command -v timeout >/dev/null 2>&1 || fail 'Команда timeout недоступна после установки coreutils-timeout; служба не установлена'
 [ -r /usr/share/libubox/jshn.sh ] || fail 'Не найдена библиотека jshn'
 [ -x /etc/init.d/rpcd ] || fail 'Не найден rpcd'
 mkdir -p /tmp/youtube-watchdog

@@ -4,7 +4,8 @@ const tmp=fs.mkdtempSync(path.join(require('os').tmpdir(),'yw-install-'));
 const p=x=>x.replace(/\\/g,'/');
 let total=0;
 function write(file,body){fs.mkdirSync(path.dirname(file),{recursive:true});fs.writeFileSync(file,body,{mode:0o755});}
-function run(name,pm,version,upgrade=false,failRpc=false,allInstalled=false){
+function run(name,pm,version,upgrade=false,failRpc=false,allInstalled=false,timeoutCase='present'){
+ if(process.env.YW_INSTALL_CASE && !name.includes(process.env.YW_INSTALL_CASE))return;
  const dir=path.join(tmp,name),root=path.join(dir,'root'),source=path.join(dir,'source');
  fs.mkdirSync(root,{recursive:true});fs.mkdirSync(source,{recursive:true});
  const payload=['files/watchdog.sh','files/probe.sh','files/init','files/rpc','files/acl.json','files/menu.json','files/overview.js','files/config','uninstall.sh'];
@@ -46,11 +47,19 @@ jsonfilter() { return 0; }
 nslookup() { return 0; }
 sleep() { return 0; }
 flock() { return 0; }
-timeout() { shift; "$@"; }
-apk() { echo "apk $*" >> '${p(dir)}/packages'; case "$1" in info) return ${allInstalled?0:1} ;; esac; }
-opkg() { echo "opkg $*" >> '${p(dir)}/packages'; case "$1" in status) ${allInstalled?'echo "Status: install ok installed"; return 0':'return 1'} ;; esac; }
+timeout() { command -v timeout >/dev/null || return 127; shift; "$@"; }
+install_timeout_fixture() {
+ case " $* " in *' coreutils-timeout '*)
+  [ '${timeoutCase}' != package_failure ] || return 1
+  [ '${timeoutCase}' = missing ] && touch '${p(dir)}/timeout-ready'
+  ;; esac
+ return 0
+}
+apk() { echo "apk $*" >> '${p(dir)}/packages'; case "$1" in info) return ${allInstalled?0:1} ;; add) install_timeout_fixture "$@" ;; esac; }
+opkg() { echo "opkg $*" >> '${p(dir)}/packages'; case "$1" in status) ${allInstalled?'echo "Status: install ok installed"; return 0':'return 1'} ;; install) install_timeout_fixture "$@" ;; esac; }
 command() {
  if [ "$1" = -v ] && [ "$2" = apk ] && [ '${pm}' = opkg ]; then return 1; fi
+ if [ "$1" = -v ] && [ "$2" = timeout ] && [ '${timeoutCase}' != present ]; then test -f '${p(dir)}/timeout-ready'; return; fi
  return 0
 }
 curl() {
@@ -65,7 +74,15 @@ curl() {
 `;
  const script=path.join(dir,'test.sh');write(script,commands+'\n'+installer);
  const result=cp.spawnSync(bb||'sh',bb?['sh',p(script)]:[script],{encoding:'utf8'});
- assert.equal(result.status,failRpc?1:0,name+'\n'+result.stdout+result.stderr);
+ const dependencyFailure=timeoutCase==='package_failure'||timeoutCase==='binary_missing';
+ assert.equal(result.status,failRpc||dependencyFailure?1:0,name+'\n'+result.stdout+result.stderr);
+ if(dependencyFailure){
+  assert(!fs.existsSync(path.join(root,'etc/init.d/youtube-watchdog')));
+  assert(!fs.existsSync(path.join(root,'usr/bin/youtube-watchdog')));
+  assert(!fs.existsSync(path.join(root,'enabled')));
+  assert(fs.readFileSync(path.join(dir,'packages'),'utf8').includes('coreutils-timeout'));
+  console.log('PASS '+name);total++;return;
+ }
  if(failRpc){
   assert.equal(fs.readFileSync(path.join(root,'usr/bin/youtube-watchdog'),'utf8'),'#!/bin/sh\necho OLD_VERSION\n');
   assert(fs.existsSync(path.join(root,'running')));assert(fs.existsSync(path.join(root,'enabled')));
@@ -76,6 +93,7 @@ curl() {
  }
  if(upgrade)assert.equal(fs.readFileSync(path.join(root,'etc/config/youtube-watchdog'),'utf8'),config);
  assert.equal(fs.readFileSync(path.join(dir,'packages'),'utf8').includes(pm+(pm==='apk'?' add':' install')),!allInstalled);
+ assert.equal(fs.readFileSync(path.join(dir,'packages'),'utf8').includes('coreutils-timeout'),timeoutCase!=='present');
  console.log('PASS '+name);total++;
 }
 run('OpenWrt24-opkg-install','opkg','24.10.7');
@@ -83,5 +101,9 @@ run('OpenWrt25-apk-install','apk','25.12.0');
 run('upgrade-preserves-UCI','apk','25.12.0',true);
 run('RPC-failure-restores-old-files-and-service','opkg','24.10.7',true,true);
 run('repeat-install-keeps-config-and-skips-packages','apk','25.12.0',true,false,true);
+run('timeout-missing-opkg','opkg','24.10.7',false,false,false,'missing');
+run('timeout-missing-apk','apk','25.12.0',false,false,false,'missing');
+run('timeout-package-failure','apk','25.12.0',false,false,false,'package_failure');
+run('timeout-binary-still-missing','opkg','24.10.7',false,false,false,'binary_missing');
 console.log(total+' isolated installer fixture checks passed; not actual OpenWrt package/procd tests.');
 fs.rmSync(tmp,{recursive:true,force:true});
