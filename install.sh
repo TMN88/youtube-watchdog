@@ -1,6 +1,6 @@
 #!/bin/sh
 set -eu
-VERSION=1.0.1
+VERSION=1.0.2
 BASE="https://raw.githubusercontent.com/TMN88/youtube-watchdog/b08400e412d29f731b746a002ec55e6efecc0446"
 fail() { echo "Ошибка: $*" >&2; exit 1; }
 [ "$(id -u)" = 0 ] || fail 'Запустите от root'
@@ -105,6 +105,9 @@ rm -rf /tmp/luci-modulecache
 /etc/init.d/rpcd restart
 ubus -t 10 wait_for youtube-watchdog || fail 'RPC объект не зарегистрирован'
 "$init" enable
+# Files and RPC registration are complete. Release the probe lock before
+# procd starts the daemon so its first cycle can actually take the lock.
+flock -u 9
 "$init" start
 sleep 2
 "$init" running >/dev/null 2>&1 || fail 'Служба не запустилась'

@@ -4,7 +4,7 @@ const tmp=fs.mkdtempSync(path.join(require('os').tmpdir(),'yw-install-'));
 const p=x=>x.replace(/\\/g,'/');
 let total=0;
 function write(file,body){fs.mkdirSync(path.dirname(file),{recursive:true});fs.writeFileSync(file,body,{mode:0o755});}
-function run(name,pm,version,upgrade=false,failRpc=false,allInstalled=false,timeoutCase='present'){
+function run(name,pm,version,upgrade=false,failRpc=false,allInstalled=false,timeoutCase='present',lockHandoff=false){
  if(process.env.YW_INSTALL_CASE && !name.includes(process.env.YW_INSTALL_CASE))return;
  const dir=path.join(tmp,name),root=path.join(dir,'root'),source=path.join(dir,'source');
  fs.mkdirSync(root,{recursive:true});fs.mkdirSync(source,{recursive:true});
@@ -12,7 +12,9 @@ function run(name,pm,version,upgrade=false,failRpc=false,allInstalled=false,time
  for(const f of payload)write(path.join(source,f),fs.readFileSync(path.join(repo,f),'utf8'));
  const init=`#!/bin/sh
 case "$1" in
- start) touch '${p(root)}/running' ;;
+ start)
+  if [ '${lockHandoff}' = true ] && [ -e '${p(root)}/operation-held' ]; then echo 'Fixture: first probe blocked by installer' >&2; exit 91; fi
+  touch '${p(root)}/running' ;;
  stop) rm -f '${p(root)}/running' ;;
  running) test -f '${p(root)}/running' ;;
  enable) touch '${p(root)}/enabled' ;;
@@ -46,7 +48,13 @@ ubus() { ${failRpc?'return 1':'return 0'}; }
 jsonfilter() { return 0; }
 nslookup() { return 0; }
 sleep() { return 0; }
-flock() { return 0; }
+flock() {
+ case "$*" in
+  9) touch '${p(root)}/operation-held' ;;
+  '-u 9') rm -f '${p(root)}/operation-held' ;;
+ esac
+ return 0
+}
 timeout() { command -v timeout >/dev/null || return 127; shift; "$@"; }
 install_timeout_fixture() {
  case " $* " in *' coreutils-timeout '*)
@@ -105,5 +113,7 @@ run('timeout-missing-opkg','opkg','24.10.7',false,false,false,'missing');
 run('timeout-missing-apk','apk','25.12.0',false,false,false,'missing');
 run('timeout-package-failure','apk','25.12.0',false,false,false,'package_failure');
 run('timeout-binary-still-missing','opkg','24.10.7',false,false,false,'binary_missing');
+run('lock-handoff-opkg','opkg','24.10.7',false,false,false,'present',true);
+run('lock-handoff-apk','apk','25.12.0',false,false,false,'present',true);
 console.log(total+' isolated installer fixture checks passed; not actual OpenWrt package/procd tests.');
 fs.rmSync(tmp,{recursive:true,force:true});
