@@ -61,6 +61,9 @@ fs.writeFileSync(path.join(root,'preview.html'),html);
  await page.evaluate(()=>Promise.all(polls.map(f=>f())));
  assert(await page.getByText('YouTube · LAN-клиент',{exact:true}).isVisible());
  assert(await page.getByText('Недоступен',{exact:true}).isVisible());
+ await page.evaluate(()=>{state.zapret_state='crashed';state.zapret_running=false;});
+ await page.evaluate(()=>Promise.all(polls.map(f=>f())));
+ assert(await page.getByText('Сбой процесса',{exact:true}).isVisible());
  console.log('PASS exact interval presets, save, double-click guard, validation, RPC errors, poll preserves edits, readonly permissions, scoped router/LAN status, no redundant row, desktop/mobile layout');
  }finally{await browser.close();}
 })().catch(e=>{console.error(e);process.exitCode=1});

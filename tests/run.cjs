@@ -10,6 +10,7 @@ const tmp = fs.mkdtempSync(path.join(require('os').tmpdir(), 'yw-test-'));
 const posix = p => p.replace(/\\/g, '/');
 let count = 0;
 function shell(name, code) {
+    if(process.env.YW_CASE && !name.includes(process.env.YW_CASE))return;
     const file = path.join(tmp, 'case.sh');
     fs.writeFileSync(file, 'set -eu\n' + code + '\n');
     const r = cp.spawnSync(busybox || 'sh', busybox ? ['sh', posix(file)] : [file], { encoding: 'utf8', env: {...process.env, TEST_TMP:posix(tmp)} });
@@ -54,12 +55,13 @@ set -e
 }
 probeTest('403/404 count as TLS/HTTP reachability',{},'HEALTHY');
 probeTest('HTTP 206 range responses are healthy',{control:'echo 206',www:'echo 206',img:'echo 206',api:'echo 206'},'HEALTHY');
-probeTest('two independent reachable resources suffice',{www:'return 28'},'HEALTHY');
-probeTest('DNS failure veto',{dns:false},'DNS_DOWN');
-probeTest('general HTTPS outage veto',{control:'return 28'},'NETWORK_DOWN');
-probeTest('control HTTP 403 is not healthy internet',{control:'echo 403'},'NETWORK_DOWN');
+probeTest('regression auxiliary success cannot mask YouTube failure',{www:'return 28'},'YOUTUBE_DOWN');
+probeTest('DNS failure veto',{dns:false,www:'return 6'},'DNS_DOWN');
+probeTest('general HTTPS outage veto',{control:'return 28',www:'return 28'},'NETWORK_DOWN');
+probeTest('control HTTP 403 is not healthy internet',{control:'echo 403',www:'return 28'},'NETWORK_DOWN');
 probeTest('two YouTube transport failures',{www:'return 28',img:'return 35'},'YOUTUBE_DOWN');
-probeTest('YouTube 5xx uncertainty',{www:'echo 503',img:'echo 502'},'UNKNOWN');
+probeTest('Site_Checker criterion accepts a completed HTTP exchange',{www:'echo 503',img:'echo 502'},'HEALTHY');
+probeTest('regression direct YouTube success remains success if control fails',{control:'return 28'},'HEALTHY');
 probeTest('certificate errors cannot trigger restart',{www:'return 60',img:'return 60'},'UNKNOWN');
 probeTest('YouTube resolver error veto',{www:'return 6'},'DNS_DOWN');
 shell('curl enforces IPv4/TLS/no proxy/time bounds',probe+`
@@ -221,9 +223,10 @@ run_probe() {
  [ "$step" -ne 3 ] || result="\${POST:-HEALTHY}"
 }
 `;
-function routerRecoveryTest(name,first,second,third,running,expected){
+function routerRecoveryTest(name,first,second,third,running,expected,registered=false){
 shell(name,common+`
 MODE=router; ZAP='${zap}'; ZAP_RUNNING=${running}; export ZAP_RUNNING
+${registered?`ubus(){ echo fixture; }; jsonfilter(){ case "$*" in *running*) echo false ;; *command*) echo /opt/zapret2/nfq2/nfqws2 ;; esac; }`:''}
 rm -f "$R/latched" "$R/restarts" "$TEST_TMP/restart-count" "$TEST_TMP/router-events" "$TEST_TMP/router-sleeps"
 echo 0 > "$TEST_TMP/router-probes"
 uptime_s(){ echo 5000; }
@@ -250,6 +253,7 @@ routerRecoveryTest('router DNS outage never restarts','DNS_DOWN','DNS_DOWN','DNS
 routerRecoveryTest('router general internet outage never restarts','NETWORK_DOWN','NETWORK_DOWN','NETWORK_DOWN',1,'no');
 routerRecoveryTest('router unknown result never restarts','UNKNOWN','UNKNOWN','UNKNOWN',1,'no');
 routerRecoveryTest('router stopped Zapret2 stays stopped','YOUTUBE_DOWN','YOUTUBE_DOWN','HEALTHY',0,'no');
+routerRecoveryTest('regression crashed registered process is recovered','YOUTUBE_DOWN','YOUTUBE_DOWN','HEALTHY',0,'yes',true);
 shell('confirmed failure -> restart -> 15s control; hysteresis latch',cycleBase+`
 cycle
 [ "$(wc -l < "$TEST_TMP/restart-count")" -eq 1 ]

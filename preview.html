@@ -106,7 +106,7 @@ return view.extend({
             stateCard.appendChild(E('div', { 'class': 'youtube-watchdog-grid' }, [
                 tile('Watchdog', s.running ? 'Работает' : 'Остановлен', s.running ? 'ok' : 'bad'),
                 tile(youtubeLabel, yt, y === 'HEALTHY' ? 'ok' : y === 'YOUTUBE_DOWN' || y === 'DNS_DOWN' || y === 'NETWORK_DOWN' ? 'bad' : 'warn'),
-                tile('Zapret2', s.zapret_running ? 'Работает' : 'Остановлен', s.zapret_running ? 'ok' : 'bad'),
+                tile('Zapret2', s.zapret_state === 'crashed' ? 'Сбой процесса' : s.zapret_running ? 'Работает' : 'Остановлен', s.zapret_running ? 'ok' : 'bad'),
                 tile('Интервал', (s.interval || 180) % 60 ? String(s.interval) + ' сек' : String((s.interval || 180) / 60) + ' мин', 'cyan')
             ]));
             stateCard.appendChild(E('div', { 'class': 'youtube-watchdog-meta' }, 'Последняя проверка: ' + (s.checked_at || '—') + (s.checking ? ' • Проверка выполняется…' : '')));

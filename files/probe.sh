@@ -1,38 +1,32 @@
 #!/bin/sh
-# Range/UA/low-speed request adapted from TMN88/Site_Checker at
-# ed1e31ac4e5e8fa662532b58bf7fb6dbf89375b7:
-# files/sitecheck-check-zapret. No standard request profile.
-# Transport reachability only; never a claim of video playback.
+# Site_Checker files/sitecheck-check-zapret, revision
+# ed1e31ac4e5e8fa662532b58bf7fb6dbf89375b7: test YouTube itself.
+# A completed HTTP exchange is reachability, not video playback proof.
 PATH=/usr/sbin:/usr/bin:/sbin:/bin
 export PATH
 dns_ok() { timeout 6 nslookup "$1" >/dev/null 2>&1; }
 https_code() {
     curl --disable --ipv4 --noproxy '*' --proto '=https' --proto-redir '=https' --tlsv1.2 \
-                --location --max-redirs 3 --silent --connect-timeout 3 --max-time 5 \
-                --speed-time 3 --speed-limit 1 --range 0-65535 \
-                --user-agent 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) curl/8.0' \
-                --output /dev/null --write-out '%{http_code}' "$1" 2>/dev/null
+        --location --max-redirs 3 --silent --connect-timeout 3 --max-time 5 \
+        --speed-time 3 --speed-limit 1 --range 0-65535 \
+        --user-agent 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) curl/8.0' \
+        --output /dev/null --write-out '%{http_code}' "$1" 2>/dev/null
 }
 probe() {
-    for host in www.youtube.com i.ytimg.com youtubei.googleapis.com example.com; do
-        dns_ok "$host" || { echo DNS_DOWN; return; }
-    done
-    code=$(https_code https://example.com/) || { echo NETWORK_DOWN; return; }
-    case "$code" in 200|204|206|301|302) ;; *) echo NETWORK_DOWN; return ;; esac
-    good=0; bad=0; uncertain=0
-    for url in https://www.youtube.com/ https://i.ytimg.com/generate_204 https://youtubei.googleapis.com/; do
-        code=$(https_code "$url") && rc=0 || rc=$?
-        if [ "$rc" -ne 0 ]; then
-            case "$rc" in 6) echo DNS_DOWN; return ;; 7|28|35|52|55|56) bad=$((bad + 1)) ;; *) uncertain=$((uncertain + 1)) ;; esac
-        else
-            case "$code" in
-                2??|3??|403|404|405) good=$((good + 1)) ;;
-                *) uncertain=$((uncertain + 1)) ;;
-            esac
-        fi
-    done
-    if [ "$good" -ge 2 ]; then echo HEALTHY
-    elif [ "$bad" -ge 2 ] && [ "$uncertain" -eq 0 ]; then echo YOUTUBE_DOWN
-    else echo UNKNOWN; fi
+    # Control/DNS failures veto recovery, but cannot override a successful
+    # direct request to YouTube with an invented YouTube failure.
+    yt_dns=0; dns_ok www.youtube.com && yt_dns=1
+    control_dns=0; dns_ok example.com && control_dns=1
+    yt_code=$(https_code https://www.youtube.com/) && yt_rc=0 || yt_rc=$?
+    if [ "$yt_rc" -eq 0 ]; then
+        case "$yt_code" in [1-5][0-9][0-9]) echo HEALTHY; return ;; *) echo UNKNOWN; return ;; esac
+    fi
+    if [ "$yt_dns" -ne 1 ] || [ "$yt_rc" -eq 6 ] || [ "$control_dns" -ne 1 ]; then echo DNS_DOWN; return; fi
+    control_code=$(https_code https://example.com/) || { echo NETWORK_DOWN; return; }
+    case "$control_code" in 2??|3??) ;; *) echo NETWORK_DOWN; return ;; esac
+    case "$yt_rc" in
+        7|28|35|52|55|56) echo YOUTUBE_DOWN ;;
+        *) echo UNKNOWN ;;
+    esac
 }
 probe

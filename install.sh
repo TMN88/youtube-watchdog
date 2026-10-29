@@ -1,6 +1,6 @@
 #!/bin/sh
 set -eu
-VERSION=1.3.0
+VERSION=1.3.1
 BASE="https://raw.githubusercontent.com/TMN88/youtube-watchdog/2bb120153407af7f1b787c78c7432ab5783c1358"
 fail() { echo "Ошибка: $*" >&2; exit 1; }
 [ "$(id -u)" = 0 ] || fail 'Запустите от root'
@@ -126,7 +126,7 @@ sleep 2
 "$init" running >/dev/null 2>&1 || fail 'Служба не запустилась'
 success=1
 echo "YouTube Watchdog $VERSION установлен. Меню: Службы → YouTube Watchdog"
-echo 'Режим router: две проверки YouTube с роутера; повторный подтверждающий тест через 30 секунд, затем штатный restart работающего Zapret2.'
+echo 'Режим router: проверка www.youtube.com с роутера способом Site_Checker; подтверждение через 30 секунд, затем restart запущенного или аварийно упавшего Zapret2.'
 echo 'При сбое интернета/DNS или неопределённом результате перезапуска нет. Лимиты: 1 попытка за 15 минут, максимум 3 за час.'
 echo 'Команды: youtube-watchdog check | status | logs'
 echo 'Удаление: sh /usr/libexec/youtube-watchdog-uninstall'

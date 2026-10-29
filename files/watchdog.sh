@@ -1,4 +1,5 @@
 #!/bin/sh
+VERSION=1.3.1
 PATH=/usr/sbin:/usr/bin:/sbin:/bin
 export PATH
 umask 077
@@ -75,6 +76,18 @@ event() {
     # Only these structured records reach the compact journal. No flash writes.
     logger -t youtube-watchdog-event -- "$1|$(date '+%Y-%m-%d %H:%M:%S %z')|$2|$3"
 }
+zapret_state() {
+    [ -x "$ZAP" ] || { echo stopped; return; }
+    service_data=$(ubus call service list '{"name":"zapret2"}' 2>/dev/null) || service_data='{}'
+    service_states=$(printf '%s' "$service_data" | jsonfilter -e '@.zapret2.instances.*.running' 2>/dev/null)
+    case "$service_states" in *false*) echo crashed; return ;; *true*) echo running; return ;; esac
+    # procd retains the desired instance after a crash. Explicit init stop
+    # removes it. Do not infer intent merely from boot autostart/enabled.
+    service_commands=$(printf '%s' "$service_data" | jsonfilter -e '@.zapret2.instances.*.command[0]' 2>/dev/null)
+    if [ -n "$service_commands" ]; then echo crashed
+    elif "$ZAP" running >/dev/null 2>&1; then echo running
+    else echo stopped; fi
+}
 allowed() {
     now=$(uptime_s)
     if [ -r "$R/restarts" ]; then
@@ -93,7 +106,8 @@ cycle() {
     sleep 30
     run_probe || { result=UNKNOWN; return 1; }
     [ "$result" = YOUTUBE_DOWN ] || return 0
-    [ -x "$ZAP" ] && "$ZAP" running >/dev/null 2>&1 || return 0
+    recovery_state=$(zapret_state)
+    case "$recovery_state" in running|crashed) ;; *) return 0 ;; esac
     allowed || return 0
     # Charge attempts before invoking restart, including failed commands.
     uptime_s >> "$R/restarts" || return 1
@@ -120,7 +134,7 @@ wait_interval() {
     while [ "$elapsed" -lt "$desired" ]; do
         delay=$((desired - elapsed))
         [ "$delay" -le 5 ] || delay=5
-        sleep "$delay" & child=$!; wait "$child"; child=''
+        sleep "$delay" 8>&- & child=$!; wait "$child"; child=''
         elapsed=$((elapsed + delay))
         if [ -e "$R/interval.changed" ]; then
             rm -f "$R/interval.changed"
@@ -150,9 +164,12 @@ status() {
         case "$(cfg mode)" in router|'') ;; *) recovery=0; [ "$why" = stale ] || why=router_local_only ;; esac
     fi
     json_init
+    json_add_string version "$VERSION"
     if "$INIT" running >/dev/null 2>&1; then json_add_boolean running 1; else json_add_boolean running 0; fi
     if "$INIT" enabled >/dev/null 2>&1; then json_add_boolean enabled 1; else json_add_boolean enabled 0; fi
-    if [ -x "$ZAP" ] && "$ZAP" running >/dev/null 2>&1; then json_add_boolean zapret_running 1; else json_add_boolean zapret_running 0; fi
+    current_zapret_state=$(zapret_state)
+    if [ "$current_zapret_state" = running ]; then json_add_boolean zapret_running 1; else json_add_boolean zapret_running 0; fi
+    json_add_string zapret_state "$current_zapret_state"
     # Display is scoped; cycle() uses the confirmed probe decision, not UI state.
     json_add_string youtube "$displayed"; json_add_string youtube_scope "$scope"
     json_add_string client_youtube "$client_saved"; json_add_string local_probe "$local_saved"
@@ -191,7 +208,7 @@ case "${1:-}" in
         # Worker inherits operation flock; stopping the parent cannot admit overlap.
         healthy=0
         while :; do
-            "$0" cycle & child=$!; wait "$child"; cycle_rc=$?; child=''
+            "$0" cycle 8>&- & child=$!; wait "$child"; cycle_rc=$?; child=''
             if [ "$cycle_rc" -eq 0 ] && [ -r "$R/state.json" ]; then
                 json_load "$(cat "$R/state.json")"; json_get_var s youtube
                 rearm "$s"
