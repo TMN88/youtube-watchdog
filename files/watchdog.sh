@@ -79,11 +79,11 @@ event() {
 zapret_state() {
     [ -x "$ZAP" ] || { echo stopped; return; }
     service_data=$(ubus call service list '{"name":"zapret2"}' 2>/dev/null) || service_data='{}'
-    service_states=$(printf '%s' "$service_data" | jsonfilter -e '@.zapret2.instances.*.running' 2>/dev/null)
+    service_states=$(printf '%s' "$service_data" | jsonfilter -e '@.zapret2.instances.*.running' 2>/dev/null) || service_states=''
     case "$service_states" in *false*) echo crashed; return ;; *true*) echo running; return ;; esac
     # procd retains the desired instance after a crash. Explicit init stop
     # removes it. Do not infer intent merely from boot autostart/enabled.
-    service_commands=$(printf '%s' "$service_data" | jsonfilter -e '@.zapret2.instances.*.command[0]' 2>/dev/null)
+    service_commands=$(printf '%s' "$service_data" | jsonfilter -e '@.zapret2.instances.*.command[0]' 2>/dev/null) || service_commands=''
     if [ -n "$service_commands" ]; then echo crashed
     elif "$ZAP" running >/dev/null 2>&1; then echo running
     else echo stopped; fi
