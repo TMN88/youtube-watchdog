@@ -13,4 +13,5 @@ jobs:
       - run: node tests/run.cjs
       - run: node tests/install.cjs
       - run: node tests/settings.cjs
+      - run: node tests/update.cjs
       - run: sha256sum -c SHA256SUMS
