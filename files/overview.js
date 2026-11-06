@@ -32,6 +32,9 @@ var css = `
 .youtube-watchdog-row{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
 .youtube-watchdog-heading{font-size:17px;font-weight:650;color:#EAF4FF}
 .youtube-watchdog-event{display:flex;gap:12px;border-top:1px solid #A4B3D41b;padding:12px 0;font-size:13px;line-height:1.5}
+.youtube-watchdog-event.youtube-watchdog-bad{color:#FF405C;border-left:3px solid #FF405C;background:#FF405C12;padding:12px;text-shadow:0 0 8px #FF405C88;box-shadow:inset 3px 0 12px #FF405C22}
+.youtube-watchdog-event.youtube-watchdog-ok{color:#39FF9A;border-left:3px solid #39FF9A;background:#39FF9A0a;padding:12px;text-shadow:0 0 8px #39FF9A77;box-shadow:inset 3px 0 12px #39FF9A18}
+.youtube-watchdog-event .youtube-watchdog-icon{color:inherit;text-shadow:0 0 6px currentColor,0 0 14px currentColor}
 .youtube-watchdog-icon{font-size:18px}.youtube-watchdog-time{color:#A4B3D4;font-size:11px}
 .youtube-watchdog-footer{text-align:center;color:#A4B3D4;font-size:10px;letter-spacing:2px;padding:5px}
 .youtube-watchdog-error{color:#FF657F;margin-top:12px;font-size:13px}
@@ -48,7 +51,7 @@ return view.extend({
         var root = E('div', { 'class': 'youtube-watchdog-root' });
         root.appendChild(E('style', {}, css));
         var stateCard = E('div', { 'class': 'youtube-watchdog-card' });
-        var journal = E('div', { 'class': 'youtube-watchdog-card' });
+        var journal = E('details', { 'class': 'youtube-watchdog-card' });
         var error = E('div', { 'class': 'youtube-watchdog-error', 'role': 'alert' });
         var buttons = [];
         var settingsControls = [];
@@ -86,13 +89,13 @@ return view.extend({
             var y = s.youtube;
             var yt = { HEALTHY: 'Доступен', YOUTUBE_DOWN: 'Недоступен', DNS_DOWN: 'Ошибка DNS', NETWORK_DOWN: 'Ошибка сети' }[y] || 'Неизвестно';
             var youtubeLabel = s.youtube_scope === 'lan' ? 'YouTube · LAN-клиент' : 'YouTube · роутер';
-            stateCard.appendChild(E('div', { 'class': 'youtube-watchdog-title' }, 'YouTube Watchdog'));
+            stateCard.appendChild(E('div', { 'class': 'youtube-watchdog-title' }, 'YouTube Watchdog · ' + (s.version || 'версия неизвестна')));
             stateCard.appendChild(E('div', { 'class': 'youtube-watchdog-eyebrow' }, 'OPENWRT • MONITORING SYSTEM'));
             stateCard.appendChild(E('div', { 'class': 'youtube-watchdog-grid' }, [
                 tile('Watchdog', s.running ? 'Работает' : 'Остановлен', s.running ? 'ok' : 'bad'),
                 tile(youtubeLabel, yt, y === 'HEALTHY' ? 'ok' : y === 'YOUTUBE_DOWN' || y === 'DNS_DOWN' || y === 'NETWORK_DOWN' ? 'bad' : 'warn'),
-                tile('Zapret2', s.zapret_state === 'crashed' ? 'Сбой процесса' : s.zapret_running ? 'Работает' : 'Остановлен', s.zapret_running ? 'ok' : 'bad'),
-                tile('Интервал', (s.interval || 180) % 60 ? String(s.interval) + ' сек' : String((s.interval || 180) / 60) + ' мин', 'cyan')
+                tile(s.engine === 'zapret' ? 'Zapret v1' : s.engine === 'zapret2' ? 'Zapret2' : 'Движок: ' + (s.engine || 'не выбран'), s.zapret_state === 'crashed' ? 'Сбой процесса' : s.zapret_running ? 'Работает' : 'Остановлен', s.zapret_running ? 'ok' : 'bad'),
+                tile('Интервал', (s.interval || 600) % 60 ? String(s.interval) + ' сек' : String((s.interval || 600) / 60) + ' мин', 'cyan')
             ]));
             stateCard.appendChild(E('div', { 'class': 'youtube-watchdog-meta' }, 'Последняя проверка: ' + (s.checked_at || '—') + (s.checking ? ' • Проверка выполняется…' : '')));
             var notice = s.recovery_enabled
@@ -114,7 +117,16 @@ return view.extend({
                 button(s.enabled ? 'Выключить' : 'Включить', 'purple', s.enabled ? 'disable' : 'enable')
             ]));
         }
-        var events = E('div');
+        var events = E('div', { 'style': 'max-height:480px;overflow-y:auto;overflow-x:hidden;padding-right:8px' });
+        var exportRecords = [];
+        journal.appendChild(E('summary', { 'class': 'youtube-watchdog-heading', 'style': 'cursor:pointer' }, 'Журнал за последние 3 суток — раскрыть / свернуть'));
+        journal.appendChild(E('button', { 'class': 'cbi-button', 'click': function(ev) {
+            ev.preventDefault();
+            var blob = new Blob([exportRecords.join('\n') + '\n'], { type: 'text/plain;charset=utf-8' });
+            var url = URL.createObjectURL(blob), a = document.createElement('a');
+            a.href = url; a.download = 'youtube-watchdog-3-days.log'; a.click();
+            setTimeout(function() { URL.revokeObjectURL(url); }, 1000);
+        } }, 'Скачать'));
         journal.appendChild(E('div', { 'class': 'youtube-watchdog-row' }, [E('span', { 'class': 'youtube-watchdog-heading' }, 'Журнал событий'), button('Обновить', 'cyan', 'refresh')]));
         journal.appendChild(events);
         var dirtyInterval = false;
@@ -128,7 +140,7 @@ return view.extend({
                 intervalInput.value = 'legacy';
             } else intervalInput.value = String(minutes);
         }
-        showInterval(data[0].interval || 180);
+        showInterval(data[0].interval || 600);
         var intervalNotice = E('div', { 'class': 'youtube-watchdog-meta', 'aria-live': 'polite' });
         intervalInput.oninput = function() { dirtyInterval = true; intervalNotice.textContent = ''; };
         intervalInput.onchange = intervalInput.oninput;
@@ -155,18 +167,39 @@ return view.extend({
             E('div', { 'class': 'youtube-watchdog-row', 'style': 'margin-top:14px' }, [
                 E('label', { 'for': 'youtube-watchdog-interval', 'class': 'youtube-watchdog-label' }, 'Интервал, минут'), intervalInput, saveInterval
             ]),
-            E('div', { 'class': 'youtube-watchdog-meta', 'id': 'youtube-watchdog-interval-help' }, 'По умолчанию — 3 минуты. Лимиты перезапуска Zapret2 сохраняются.'), intervalNotice
+            E('div', { 'class': 'youtube-watchdog-meta', 'id': 'youtube-watchdog-interval-help' }, 'По умолчанию — 10 минут. Лимиты перезапуска Zapret2 сохраняются.'), intervalNotice
         ]);
         function drawLogs(l) {
             events.textContent = '';
-            (l.events || []).forEach(function(item) {
+            exportRecords = (l.events || []).map(function(item) { return item.record; });
+            (l.events || []).slice(0, 100).forEach(function(item) {
                 var e;
                 try { e = JSON.parse(item.record); } catch (ignore) { return; }
                 var restart = e.type === 'restart', restored = e.status === 'restored';
-                var text = restart ? 'Перезапуск Zapret2 • подтверждён отказ YouTube' + (e.reason === 'confirmed_router_failure' ? ' с роутера' : '') + ' • ' + (e.status === 'success' ? 'команда выполнена' : 'ошибка команды')
+                var text = restart ? 'Перезапуск ' + (e.detail === 'engine=zapret' ? 'Zapret v1' : 'Zapret2') + ' • подтверждён отказ YouTube' + (e.reason === 'confirmed_router_failure' ? ' с роутера' : '') + ' • ' + (e.status === 'success' ? 'команда выполнена' : 'ошибка команды')
                     : restored ? 'YouTube восстановлен' : e.status === 'not_restored' ? 'YouTube не восстановлен' : 'Результат неизвестен';
                 var color = restart || e.status === 'unknown' ? 'warn' : restored ? 'ok' : 'bad';
-                events.appendChild(E('div', { 'class': 'youtube-watchdog-event' }, [
+                if (e.type === 'check') {
+                    text = e.status === 'HEALTHY' ? 'Проверка: YouTube доступен с роутера' : e.status === 'YOUTUBE_DOWN' ? 'Проверка: отказ YouTube' : 'Проверка: сеть, DNS или неопределённый результат';
+                    color = e.status === 'HEALTHY' ? 'ok' : e.status === 'UNKNOWN' ? 'warn' : 'bad';
+                    var reasons = { router_network_or_dns: 'Сбой DNS или общего интернета: восстановление запрещено', router_probe_unknown: 'Неопределённый результат: восстановление запрещено', client_probe_unknown: 'Нет достоверного ответа LAN-клиента', client_not_configured: 'LAN-клиент не настроен', router_local_only: 'Режим наблюдения без восстановления' };
+                    if (reasons[e.reason]) text += ' • ' + reasons[e.reason];
+                    if (e.detail) {
+                        var fields = {};
+                        e.detail.split(' ').forEach(function(part) { var pair = part.split('='); fields[pair[0]] = pair[1]; });
+                        var errors = { '0': 'нет', '6': 'ошибка DNS', '7': 'нет TCP-соединения', '28': 'тайм-аут или низкая скорость', '35': 'ошибка TLS', '52': 'пустой ответ', '55': 'ошибка отправки', '56': 'обрыв при получении', '60': 'ошибка сертификата' };
+                        text += ' • YouTube: HTTP ' + fields.youtube_http + ', ' + fields.youtube_seconds + ' с; curl ' + fields.youtube_curl + ' (' + (errors[fields.youtube_curl] || 'см. код curl') + ')';
+                        text += ' • DNS YouTube: ' + (fields.youtube_dns === '1' ? 'OK' : 'ошибка') + '; DNS контроля: ' + (fields.control_dns === '1' ? 'OK' : 'ошибка');
+                        text += fields.control_http === 'not_tested' ? ' • Контроль интернета не требовался' : ' • Контроль интернета: HTTP ' + fields.control_http + ', curl ' + fields.control_curl;
+                    }
+                }
+                if (e.type === 'decision') {
+                    text = e.reason === 'cooldown_or_hourly_limit' ? 'Перезапуск отложен: интервал 15 минут или лимит 3 попытки за час' : e.reason === 'zapret_stopped' ? 'Перезапуск пропущен: Zapret2 остановлен' : 'Отказ обнаружен: повторная проверка через 30 секунд';
+                    color = 'warn';
+                }
+                if (restart) color = e.status === 'success' ? 'ok' : 'bad';
+                if (e.type === 'check' && e.status === 'UNKNOWN' && /network|dns|unknown|not_configured|missing|invalid/.test(e.reason || '')) color = 'bad';
+                events.appendChild(E('div', { 'class': 'youtube-watchdog-event youtube-watchdog-' + color }, [
                     E('span', { 'class': 'youtube-watchdog-icon youtube-watchdog-' + color }, restart ? '↻' : restored ? '●' : e.status === 'not_restored' ? '×' : '?'),
                     E('div', {}, [E('div', { 'class': 'youtube-watchdog-time' }, e.at), E('div', {}, text)])
                 ]));
@@ -176,7 +209,7 @@ return view.extend({
         function refresh() {
             return Promise.all([statusCall(), logsCall()]).then(function(d) {
                 drawStatus(d[0]); drawLogs(d[1]);
-                if (!dirtyInterval && document.activeElement !== intervalInput) showInterval(d[0].interval || 180);
+                if (!dirtyInterval && document.activeElement !== intervalInput) showInterval(d[0].interval || 600);
                 disable(busy || !!d[0].checking);
             });
         }

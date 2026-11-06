@@ -1,6 +1,6 @@
 config watchdog 'main'
 	option mode 'router'
-	option interval '180'
+	option interval '600'
 	# SSH mode requires a separate wired/Wi-Fi LAN client using this router.
 	option client_host ''
 	option client_user 'watchdog'

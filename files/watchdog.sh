@@ -1,5 +1,5 @@
 #!/bin/sh
-VERSION=1.3.1
+VERSION=1.4.1
 PATH=/usr/sbin:/usr/bin:/sbin:/bin
 export PATH
 umask 077
@@ -13,8 +13,8 @@ cfg() { uci -q get "youtube-watchdog.main.$1" 2>/dev/null; }
 uptime_s() { cut -d. -f1 /proc/uptime; }
 interval() {
     n=$(cfg interval)
-    case "$n" in ''|*[!0-9]*) n=180 ;; esac
-    [ "$n" -ge 60 ] 2>/dev/null && [ "$n" -le 86400 ] 2>/dev/null || n=180
+    case "$n" in ''|*[!0-9]*) n=600 ;; esac
+    [ "$n" -ge 60 ] 2>/dev/null && [ "$n" -le 86400 ] 2>/dev/null || n=600
     echo "$n"
 }
 lock() {
@@ -32,13 +32,15 @@ write_state() {
     json_add_int checked_uptime "$(uptime_s)"
     json_dump > "$R/state.new" || return 1
     mv "$R/state.new" "$R/state.json"
+    event check "$reason" "$result"
 }
 valid_host() {
     # Literal RFC1918 IPv4 only; no shell, DNS, ssh-option or URL injection.
     echo "$1" | awk -F. 'NF!=4 {exit 1} {for(i=1;i<=4;i++) if($i !~ /^[0-9]+$/ || length($i)>3 || $i>255) exit 1; if($1==10 || ($1==172 && $2>=16 && $2<=31) || ($1==192 && $2==168)) exit 0; exit 1}'
 }
 run_probe() {
-    local_result=$("$PROBE") || local_result=UNKNOWN
+    rm -f "$R/probe-details"
+    local_result=$(YW_DETAILS="$R/probe-details" "$PROBE") || local_result=UNKNOWN
     result=UNKNOWN; reason=router_local_only
     case "$(cfg mode)" in router|'')
         case "$local_result" in
@@ -73,17 +75,39 @@ run_probe() {
     write_state
 }
 event() {
-    # Only these structured records reach the compact journal. No flash writes.
-    logger -t youtube-watchdog-event -- "$1|$(date '+%Y-%m-%d %H:%M:%S %z')|$2|$3"
+    # Private bounded RAM history is independent of system log rotation.
+    detail=''
+    if [ "$1" = check ] && [ -r "$R/probe-details" ]; then detail=$(cat "$R/probe-details"); fi
+    case "$1" in restart|control) detail="engine=${engine:-unknown}" ;; esac
+    record="$1|$(date '+%Y-%m-%d %H:%M:%S %z')|$2|$3|$detail"
+    printf '%s\n' "$record" >> "$R/events"
+    cutoff=$(date -d "@$(( $(date +%s) - 259200 ))" '+%Y-%m-%d %H:%M:%S') || return 1
+    awk -F'|' -v cutoff="$cutoff" '$2 >= cutoff' "$R/events" > "$R/events.new" && mv "$R/events.new" "$R/events"
+    logger -t youtube-watchdog-event -- "$record"
+}
+select_engine() {
+    engine=$(cfg engine)
+    case "$engine" in zapret|zapret2) ;; '') engine=zapret2 ;;
+        auto)
+            engines=''
+            for candidate in zapret zapret2; do
+                data=$(ubus call service list "{\"name\":\"$candidate\"}" 2>/dev/null) || data='{}'
+                registered=$(printf '%s' "$data" | jsonfilter -e "@.$candidate.instances.*.command[0]" 2>/dev/null) || registered=''
+                [ -z "$registered" ] || engines="$engines $candidate"
+            done
+            case "$engines" in ' zapret') engine=zapret ;; ' zapret2') engine=zapret2 ;; *) engine=ambiguous ;; esac ;;
+        *) engine=invalid ;;
+    esac
+    case "$engine" in zapret|zapret2) ZAP="/etc/init.d/$engine" ;; *) ZAP=/nonexistent ;; esac
 }
 zapret_state() {
     [ -x "$ZAP" ] || { echo stopped; return; }
-    service_data=$(ubus call service list '{"name":"zapret2"}' 2>/dev/null) || service_data='{}'
-    service_states=$(printf '%s' "$service_data" | jsonfilter -e '@.zapret2.instances.*.running' 2>/dev/null) || service_states=''
+    service_data=$(ubus call service list "{\"name\":\"$engine\"}" 2>/dev/null) || service_data='{}'
+    service_states=$(printf '%s' "$service_data" | jsonfilter -e "@.$engine.instances.*.running" 2>/dev/null) || service_states=''
     case "$service_states" in *false*) echo crashed; return ;; *true*) echo running; return ;; esac
     # procd retains the desired instance after a crash. Explicit init stop
     # removes it. Do not infer intent merely from boot autostart/enabled.
-    service_commands=$(printf '%s' "$service_data" | jsonfilter -e '@.zapret2.instances.*.command[0]' 2>/dev/null) || service_commands=''
+    service_commands=$(printf '%s' "$service_data" | jsonfilter -e "@.$engine.instances.*.command[0]" 2>/dev/null) || service_commands=''
     if [ -n "$service_commands" ]; then echo crashed
     elif "$ZAP" running >/dev/null 2>&1; then echo running
     else echo stopped; fi
@@ -99,15 +123,17 @@ allowed() {
     [ "$count" -lt 3 ] && { [ "$count" -eq 0 ] || [ $((now - last)) -ge 900 ]; }
 }
 cycle() {
+    select_engine
     run_probe || { result=UNKNOWN; return 1; }
     [ "$result" = YOUTUBE_DOWN ] || return 0
-    # Rearm only after two consecutive healthy daemon checks.
-    [ ! -e "$R/latched" ] || return 0
+    # Persistent failures may retry after cooldown; a latch must not disable recovery.
+    allowed || { event decision cooldown_or_hourly_limit waiting; return 0; }
+    event decision confirm_failure waiting_30_seconds
     sleep 30
     run_probe || { result=UNKNOWN; return 1; }
     [ "$result" = YOUTUBE_DOWN ] || return 0
     recovery_state=$(zapret_state)
-    case "$recovery_state" in running|crashed) ;; *) return 0 ;; esac
+    case "$recovery_state" in running|crashed) ;; *) event decision zapret_stopped skipped; return 0 ;; esac
     allowed || return 0
     # Charge attempts before invoking restart, including failed commands.
     uptime_s >> "$R/restarts" || return 1
@@ -143,6 +169,7 @@ wait_interval() {
     done
 }
 status() {
+    select_engine
     saved=UNKNOWN; local_saved=UNKNOWN; why=not_checked; checked='—'
     if [ -r "$R/state.json" ]; then
         json_load "$(cat "$R/state.json")"
@@ -165,6 +192,7 @@ status() {
     fi
     json_init
     json_add_string version "$VERSION"
+    json_add_string engine "$engine"
     if "$INIT" running >/dev/null 2>&1; then json_add_boolean running 1; else json_add_boolean running 0; fi
     if "$INIT" enabled >/dev/null 2>&1; then json_add_boolean enabled 1; else json_add_boolean enabled 0; fi
     current_zapret_state=$(zapret_state)
@@ -180,17 +208,23 @@ status() {
     json_dump
 }
 logs() {
+    cutoff=$(date -d "@$(( $(date +%s) - 259200 ))" '+%Y-%m-%d %H:%M:%S') || return 1
     json_init; json_add_array events
     # Anchor the unique logger tag and accept only two known record schemas.
-    logread -e youtube-watchdog-event 2>/dev/null | sed -n 's/^.* youtube-watchdog-event: //p' | tail -n 20 | awk '{a[NR]=$0} END {for(i=NR;i>0;i--) print a[i]}' |
-    while IFS='|' read -r kind at cause outcome extra; do
+    { if [ -r "$R/events" ]; then cat "$R/events"; else
+        logread -e youtube-watchdog-event 2>/dev/null | sed -n 's/^.* youtube-watchdog-event: //p'
+    fi; } | awk -F'|' -v cutoff="$cutoff" '$2 >= cutoff {a[++n]=$0} END {for(i=n;i>0;i--) print a[i]}' |
+    while IFS='|' read -r kind at cause outcome detail extra; do
         [ -z "$extra" ] || continue
         case "$kind:$cause:$outcome" in
+            decision:cooldown_or_hourly_limit:waiting|decision:confirm_failure:waiting_30_seconds|decision:zapret_stopped:skipped) ;;
+            check:*:HEALTHY|check:*:YOUTUBE_DOWN|check:*:UNKNOWN) ;;
             restart:confirmed_client_failure:success|restart:confirmed_client_failure:failed|restart:confirmed_router_failure:success|restart:confirmed_router_failure:failed|control:post_restart:restored|control:post_restart:not_restored|control:post_restart:unknown) ;;
             *) continue ;;
         esac
         # The pipeline subshell emits each object independently into a RAM stream.
         json_init; json_add_string type "$kind"; json_add_string at "$at"
+        json_add_string detail "$detail"
         json_add_string reason "$cause"; json_add_string status "$outcome"; json_dump
     done > "$R/logs.$$"
     while IFS= read -r line; do

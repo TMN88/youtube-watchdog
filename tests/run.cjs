@@ -64,12 +64,21 @@ probeTest('Site_Checker criterion accepts a completed HTTP exchange',{www:'echo 
 probeTest('regression direct YouTube success remains success if control fails',{control:'return 28'},'HEALTHY');
 probeTest('certificate errors cannot trigger restart',{www:'return 60',img:'return 60'},'UNKNOWN');
 probeTest('YouTube resolver error veto',{www:'return 6'},'DNS_DOWN');
+shell('probe records numeric failure and control evidence without raw URLs',probe+`
+YW_DETAILS="$TEST_TMP/details"
+dns_ok() { return 0; }
+https_code() { case "$1" in *youtube*) echo 000; return 28 ;; *) echo 200 ;; esac; }
+[ "$(probe)" = YOUTUBE_DOWN ]
+grep -q 'youtube_http=000 youtube_curl=28' "$YW_DETAILS"
+grep -q 'control_http=200 control_curl=0' "$YW_DETAILS"
+! grep -q 'https://' "$YW_DETAILS"
+`);
 shell('curl enforces IPv4/TLS/no proxy/time bounds',probe+`
 curl() {
  case " $* " in *' --ipv4 '*) ;; *) return 90 ;; esac
  case " $* " in *' --noproxy * '*) ;; *) return 91 ;; esac
  case " $* " in *' --proto =https '*) ;; *) return 92 ;; esac
- case " $* " in *' --max-time 5 '*) ;; *) return 93 ;; esac
+ case " $* " in *' --max-time 25 '*) ;; *) return 93 ;; esac
  case " $* " in *' --insecure '*|*' -k '*) return 94 ;; esac
  echo 204
 }
@@ -78,8 +87,8 @@ curl() {
 shell('Site_Checker system profile uses range UA and low-speed guard',probe+`
 curl(){
  case " $* " in *' --range 0-65535 '*) ;; *) return 91 ;; esac
- case " $* " in *' --speed-time 3 --speed-limit 1 '*) ;; *) return 92 ;; esac
- case " $* " in *' --connect-timeout 3 --max-time 5 '*) ;; *) return 93 ;; esac
+ case " $* " in *' --speed-time 10 --speed-limit 1 '*) ;; *) return 92 ;; esac
+ case " $* " in *' --connect-timeout 5 --max-time 25 '*) ;; *) return 93 ;; esac
  case " $* " in *'Mozilla/5.0 (Windows NT 10.0; Win64; x64) curl/8.0'*) ;; *) return 94 ;; esac
  case " $* " in *' --location --max-redirs 3 '*) ;; *) return 95 ;; esac
  echo 200
@@ -91,8 +100,10 @@ const watchdog=read('files/watchdog.sh').split('case "${1:-}" in')[0]
  .replace('R=/tmp/youtube-watchdog','R="$TEST_TMP/runtime"')
  .replace('. /usr/share/libubox/jshn.sh','')
  .replaceAll('/etc/youtube-watchdog',posix(path.join(tmp,'keys')))
- .replace('local_result=$("$PROBE")','local_result=$(mock_local_probe)');
+ .replace('local_result=$(YW_DETAILS="$R/probe-details" "$PROBE")','local_result=$(mock_local_probe)');
 const common=watchdog+`
+select_engine() { engine=zapret2; }
+date() { case "$*" in '+%s') echo 1793124000 ;; -d*) echo '2026-10-24 18:00:00' ;; *) echo '2026-10-27 18:00:00 +0300' ;; esac; }
 write_state() { printf '%s|%s\\n' "$result" "$reason" > "$R/test-state"; }
 mock_local_probe() { echo "\${LOCAL:-HEALTHY}"; }
 cfg() {
@@ -147,9 +158,9 @@ TEST_LOCAL=DNS_DOWN; out=$(status)
 printf '%s\\n' "$out" | grep -qx 'youtube=DNS_DOWN'
 `);
 shell('interval supports one minute and bounds malformed values',common+`
-INTERVAL=1; [ "$(interval)" = 180 ]
+INTERVAL=1; [ "$(interval)" = 600 ]
 INTERVAL=60; [ "$(interval)" = 60 ]
-INTERVAL=garbage; [ "$(interval)" = 180 ]
+INTERVAL=garbage; [ "$(interval)" = 600 ]
 INTERVAL=300; [ "$(interval)" = 300 ]
 `);
 shell('client address and SSH injection validation',common+`
@@ -263,6 +274,12 @@ grep -q '^30$' "$TEST_TMP/sleeps"; grep -q '^15$' "$TEST_TMP/sleeps"
 cycle
 [ "$(wc -l < "$TEST_TMP/restart-count")" -eq 1 ]
 `);
+shell('persistent failure retries after cooldown despite latch',cycleBase+`
+POST=YOUTUBE_DOWN; cycle
+[ -e "$R/latched" ]
+uptime_s() { echo 5901; }; step=0; cycle
+[ "$(wc -l < "$TEST_TMP/restart-count")" -eq 2 ]
+`);
 shell('second test network/UNKNOWN prevents restart',cycleBase+`
 SECOND=UNKNOWN; cycle
 [ ! -e "$TEST_TMP/restart-count" ]
@@ -307,6 +324,12 @@ shell('missing runtime state cannot authorize recovery',cycleBase+`
 run_probe() { result=YOUTUBE_DOWN; return 1; }
 cycle && exit 1
 [ ! -e "$TEST_TMP/restart-count" ]
+`);
+shell('dedicated RAM journal retains three days and survives empty syslog',common+`
+rm -f "$R/events"; logger() { :; }
+echo 'control|2026-10-23 18:00:00 +0300|post_restart|restored|' > "$R/events"
+i=0; while [ "$i" -lt 105 ]; do event control post_restart restored; i=$((i+1)); done
+[ "$(wc -l < "$R/events")" -eq 105 ]; rm -f "$R/events"
 `);
 shell('journal includes only restart and control, newest first',common+`
 logread() {
