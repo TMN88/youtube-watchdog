@@ -2,7 +2,7 @@
 . /usr/share/libubox/jshn.sh
 reply() { json_init; json_add_boolean ok "$1"; [ -z "${2:-}" ] || json_add_string message "$2"; json_dump; }
 case "$1" in
-    list) echo '{"status":{},"logs":{},"start":{},"stop":{},"restart":{},"enable":{},"disable":{},"check":{},"set_interval":{"minutes":0}}' ;;
+    list) echo '{"status":{},"logs":{},"start":{},"stop":{},"restart":{},"enable":{},"disable":{},"check":{},"restart_engine":{},"set_interval":{"minutes":0}}' ;;
     call)
         # Only fixed actions and a validated integer interval are accepted.
         read -r input
@@ -14,6 +14,13 @@ case "$1" in
                 mkdir -p /tmp/youtube-watchdog
                 if ! flock -n /tmp/youtube-watchdog/operation.lock true 2>/dev/null; then reply 0; exit 0; fi
                 /usr/bin/youtube-watchdog check </dev/null >/dev/null 2>&1 &
+                reply 1 ;;
+            restart_engine)
+                mkdir -p /tmp/youtube-watchdog
+                exec 9>/tmp/youtube-watchdog/operation.lock
+                if ! flock -n 9; then reply 0 'Уже выполняется проверка или перезапуск'; exit 0; fi
+                # The worker keeps the inherited lock; no second click can queue another action.
+                /usr/bin/youtube-watchdog restart-engine-locked </dev/null >/dev/null 2>&1 &
                 reply 1 ;;
             set_interval)
                 json_load "$input" || { reply 0 'Некорректный запрос'; exit 0; }

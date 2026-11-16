@@ -1,5 +1,5 @@
 #!/bin/sh
-VERSION=1.4.1
+VERSION=1.4.2
 PATH=/usr/sbin:/usr/bin:/sbin:/bin
 export PATH
 umask 077
@@ -46,8 +46,9 @@ run_probe() {
         case "$local_result" in
             HEALTHY) result=HEALTHY; reason=router_https_reachable ;;
             YOUTUBE_DOWN) result=YOUTUBE_DOWN; reason=router_youtube_transport_failure ;;
-            DNS_DOWN|NETWORK_DOWN) reason=router_network_or_dns ;;
-            *) reason=router_probe_unknown ;;
+            DNS_DOWN) result=DNS_DOWN; reason=router_dns_failure ;;
+            NETWORK_DOWN) result=NETWORK_DOWN; reason=router_network_failure ;;
+            *) result=YOUTUBE_DOWN; reason=router_probe_unknown ;;
         esac
         write_state; return ;;
     esac
@@ -66,11 +67,9 @@ run_probe() {
         case "$remote" in
             HEALTHY) result=HEALTHY; reason=client_https_reachable ;;
             YOUTUBE_DOWN) result=YOUTUBE_DOWN; reason=client_youtube_transport_failure ;;
-            NETWORK_DOWN|DNS_DOWN) reason=client_general_network_or_dns ;;
-            *) reason=client_probe_unknown ;;
+            NETWORK_DOWN|DNS_DOWN) result="$remote"; reason=client_general_network_or_dns ;;
+            *) result=YOUTUBE_DOWN; reason=client_probe_unknown ;;
         esac
-        # Local network/DNS/TLS uncertainty vetoes recovery as an additional guard.
-        case "$local_result" in HEALTHY|YOUTUBE_DOWN) ;; *) result=UNKNOWN; reason=router_network_or_dns ;; esac
     fi
     write_state
 }
@@ -122,33 +121,43 @@ allowed() {
     if [ -r "$R/restarts" ]; then count=$(wc -l < "$R/restarts"); last=$(tail -n 1 "$R/restarts"); fi
     [ "$count" -lt 3 ] && { [ "$count" -eq 0 ] || [ $((now - last)) -ge 900 ]; }
 }
+needs_recovery() {
+    case "$result" in YOUTUBE_DOWN|DNS_DOWN|NETWORK_DOWN) return 0 ;; *) return 1 ;; esac
+}
+restart_engine() {
+    # Automatic and manual actions share the operation lock and restart budget.
+    [ -x "$ZAP" ] || { event decision engine_unavailable skipped; return 1; }
+    allowed || { event decision cooldown_or_hourly_limit waiting; return 1; }
+    uptime_s >> "$R/restarts" || return 1
+    : > "$R/latched" || return 1
+    restart_rc=0
+    if timeout 40 "$ZAP" restart >/dev/null 2>&1; then
+        event restart "$restart_reason" success
+    else
+        event restart "$restart_reason" failed
+        restart_rc=1
+    fi
+    sleep 15
+    run_probe || result=UNKNOWN
+    case "$result" in HEALTHY) outcome=restored ;; YOUTUBE_DOWN|DNS_DOWN|NETWORK_DOWN) outcome=not_restored ;; *) outcome=unknown ;; esac
+    event control post_restart "$outcome"
+    return "$restart_rc"
+}
 cycle() {
     select_engine
     run_probe || { result=UNKNOWN; return 1; }
-    [ "$result" = YOUTUBE_DOWN ] || return 0
+    needs_recovery || return 0
     # Persistent failures may retry after cooldown; a latch must not disable recovery.
     allowed || { event decision cooldown_or_hourly_limit waiting; return 0; }
     event decision confirm_failure waiting_30_seconds
     sleep 30
     run_probe || { result=UNKNOWN; return 1; }
-    [ "$result" = YOUTUBE_DOWN ] || return 0
+    needs_recovery || return 0
     recovery_state=$(zapret_state)
     case "$recovery_state" in running|crashed) ;; *) event decision zapret_stopped skipped; return 0 ;; esac
-    allowed || return 0
-    # Charge attempts before invoking restart, including failed commands.
-    uptime_s >> "$R/restarts" || return 1
-    : > "$R/latched" || return 1
     restart_reason=confirmed_client_failure
     case "$(cfg mode)" in router|'') restart_reason=confirmed_router_failure ;; esac
-    if timeout 40 "$ZAP" restart >/dev/null 2>&1; then
-        event restart "$restart_reason" success
-    else
-        event restart "$restart_reason" failed
-    fi
-    sleep 15
-    run_probe || result=UNKNOWN
-    case "$result" in HEALTHY) outcome=restored ;; YOUTUBE_DOWN) outcome=not_restored ;; *) outcome=unknown ;; esac
-    event control post_restart "$outcome"
+    restart_engine || return 0
 }
 rearm() {
     if [ "$1" = HEALTHY ]; then healthy=$((healthy + 1)); else healthy=0; fi
@@ -217,9 +226,9 @@ logs() {
     while IFS='|' read -r kind at cause outcome detail extra; do
         [ -z "$extra" ] || continue
         case "$kind:$cause:$outcome" in
-            decision:cooldown_or_hourly_limit:waiting|decision:confirm_failure:waiting_30_seconds|decision:zapret_stopped:skipped) ;;
-            check:*:HEALTHY|check:*:YOUTUBE_DOWN|check:*:UNKNOWN) ;;
-            restart:confirmed_client_failure:success|restart:confirmed_client_failure:failed|restart:confirmed_router_failure:success|restart:confirmed_router_failure:failed|control:post_restart:restored|control:post_restart:not_restored|control:post_restart:unknown) ;;
+            decision:cooldown_or_hourly_limit:waiting|decision:confirm_failure:waiting_30_seconds|decision:zapret_stopped:skipped|decision:engine_unavailable:skipped) ;;
+            check:*:HEALTHY|check:*:YOUTUBE_DOWN|check:*:DNS_DOWN|check:*:NETWORK_DOWN|check:*:UNKNOWN) ;;
+            restart:manual:success|restart:manual:failed|restart:confirmed_client_failure:success|restart:confirmed_client_failure:failed|restart:confirmed_router_failure:success|restart:confirmed_router_failure:failed|control:post_restart:restored|control:post_restart:not_restored|control:post_restart:unknown) ;;
             *) continue ;;
         esac
         # The pipeline subshell emits each object independently into a RAM stream.
@@ -253,7 +262,12 @@ case "${1:-}" in
         done ;;
     cycle) lock || exit 75; cycle ;;
     check) lock || { echo 'Проверка уже выполняется' >&2; exit 1; }; run_probe; status ;;
+    restart-engine-locked)
+        # Internal rpcd entrypoint; inherited fd9 owns the operation lock.
+        flock -n 9 || exit 75
+        select_engine; restart_reason=manual; restart_engine ;;
+    restart-engine) lock || exit 75; select_engine; restart_reason=manual; restart_engine ;;
     status) status ;;
     logs) logs ;;
-    *) echo 'youtube-watchdog check|status|logs' >&2; exit 1 ;;
+    *) echo 'youtube-watchdog check|status|logs|restart-engine' >&2; exit 1 ;;
 esac

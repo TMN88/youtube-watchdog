@@ -20,8 +20,8 @@ details() {
 probe() {
     started=$(cut -d. -f1 /proc/uptime)
     control_code=not_tested; control_rc=not_tested
-    # Control/DNS failures veto recovery, but cannot override a successful
-    # direct request to YouTube with an invented YouTube failure.
+    # Classify DNS/control failures for diagnostics. The worker owns recovery
+    # policy; a successful direct YouTube request remains HEALTHY.
     yt_dns=0; dns_ok www.youtube.com && yt_dns=1
     control_dns=0; dns_ok example.com && control_dns=1
     yt_code=$(https_code https://www.youtube.com/) && yt_rc=0 || yt_rc=$?

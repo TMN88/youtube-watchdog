@@ -29,7 +29,7 @@ for (const file of ['install.sh','uninstall.sh','files/probe.sh','files/watchdog
 new vm.Script('(function(){'+read('files/overview.js')+'})'); count++;
 const acl=JSON.parse(read('files/acl.json'))['luci-app-youtube-watchdog'];
 assert.deepEqual(acl.read.ubus['youtube-watchdog'],['status','logs']);
-assert.deepEqual(acl.write.ubus['youtube-watchdog'],['start','stop','restart','check','enable','disable','set_interval']);
+assert.deepEqual(acl.write.ubus['youtube-watchdog'],['start','stop','restart','check','enable','disable','set_interval','restart_engine']);
 assert(!JSON.stringify(acl).includes('file')); count++;
 const menu=JSON.parse(read('files/menu.json'));
 assert.equal(menu['admin/services/youtube-watchdog'].action.path,'youtube-watchdog/overview'); count++;
@@ -62,7 +62,7 @@ probeTest('control HTTP 403 is not healthy internet',{control:'echo 403',www:'re
 probeTest('two YouTube transport failures',{www:'return 28',img:'return 35'},'YOUTUBE_DOWN');
 probeTest('Site_Checker criterion accepts a completed HTTP exchange',{www:'echo 503',img:'echo 502'},'HEALTHY');
 probeTest('regression direct YouTube success remains success if control fails',{control:'return 28'},'HEALTHY');
-probeTest('certificate errors cannot trigger restart',{www:'return 60',img:'return 60'},'UNKNOWN');
+probeTest('certificate errors retain diagnostic UNKNOWN',{www:'return 60',img:'return 60'},'UNKNOWN');
 probeTest('YouTube resolver error veto',{www:'return 6'},'DNS_DOWN');
 shell('probe records numeric failure and control evidence without raw URLs',probe+`
 YW_DETAILS="$TEST_TMP/details"
@@ -187,10 +187,10 @@ ssh() {
 }
 REMOTE=HEALTHY; run_probe; [ "$result" = HEALTHY ]
 REMOTE=YOUTUBE_DOWN; run_probe; [ "$result" = YOUTUBE_DOWN ]
-REMOTE=DNS_DOWN; run_probe; [ "$result" = UNKNOWN ]
-REMOTE='garbage HEALTHY'; run_probe; [ "$result" = UNKNOWN ]
-REMOTE=YOUTUBE_DOWN; LOCAL=DNS_DOWN; run_probe; [ "$result" = UNKNOWN ]
-LOCAL=''; mock_local_probe() { return 1; }; run_probe; [ "$result" = UNKNOWN ]
+REMOTE=DNS_DOWN; run_probe; [ "$result" = DNS_DOWN ]
+REMOTE='garbage HEALTHY'; run_probe; [ "$result" = YOUTUBE_DOWN ]
+REMOTE=YOUTUBE_DOWN; LOCAL=DNS_DOWN; run_probe; [ "$result" = YOUTUBE_DOWN ]
+LOCAL=''; mock_local_probe() { return 1; }; run_probe; [ "$result" = YOUTUBE_DOWN ]
 CONFIRM=0; run_probe; [ "$result" = UNKNOWN ]
 `);
 shell('procd command/respawn and UCI trigger wiring',read('files/init')+`
@@ -260,9 +260,11 @@ else [ ! -e "$TEST_TMP/restart-count" ]; fi
 }
 routerRecoveryTest('real router decision path restarts after 30s and runs control','YOUTUBE_DOWN','YOUTUBE_DOWN','HEALTHY',1,'yes');
 routerRecoveryTest('router transient recovers during 30s confirmation','YOUTUBE_DOWN','HEALTHY','HEALTHY',1,'no');
-routerRecoveryTest('router DNS outage never restarts','DNS_DOWN','DNS_DOWN','DNS_DOWN',1,'no');
-routerRecoveryTest('router general internet outage never restarts','NETWORK_DOWN','NETWORK_DOWN','NETWORK_DOWN',1,'no');
-routerRecoveryTest('router unknown result never restarts','UNKNOWN','UNKNOWN','UNKNOWN',1,'no');
+routerRecoveryTest('router DNS outage now restarts','DNS_DOWN','DNS_DOWN','HEALTHY',1,'yes');
+routerRecoveryTest('router general internet outage now restarts','NETWORK_DOWN','NETWORK_DOWN','HEALTHY',1,'yes');
+routerRecoveryTest('router unknown probe now restarts','UNKNOWN','UNKNOWN','HEALTHY',1,'yes');
+routerRecoveryTest('DNS transient clears before restart','DNS_DOWN','HEALTHY','HEALTHY',1,'no');
+routerRecoveryTest('mixed failures remain an outage','DNS_DOWN','NETWORK_DOWN','HEALTHY',1,'yes');
 routerRecoveryTest('router stopped Zapret2 stays stopped','YOUTUBE_DOWN','YOUTUBE_DOWN','HEALTHY',0,'no');
 routerRecoveryTest('regression crashed registered process is recovered','YOUTUBE_DOWN','YOUTUBE_DOWN','HEALTHY',0,'yes',true);
 shell('confirmed failure -> restart -> 15s control; hysteresis latch',cycleBase+`
@@ -297,6 +299,18 @@ ZAP_RC=1; export ZAP_RC; POST=UNKNOWN; cycle
 [ "$(wc -l < "$R/restarts")" -eq 1 ]
 grep -q 'restart confirmed_client_failure failed' "$TEST_TMP/events"
 grep -q 'control post_restart unknown' "$TEST_TMP/events"
+`);
+shell('manual restart uses selected engine even when stopped',cycleBase+`
+ZAP_RUNNING=0; export ZAP_RUNNING; restart_reason=manual; step=2
+restart_engine
+[ "$(wc -l < "$TEST_TMP/restart-count")" -eq 1 ]
+grep -q 'restart manual success' "$TEST_TMP/events"
+grep -q 'control post_restart restored' "$TEST_TMP/events"
+`);
+shell('manual restart cannot bypass shared cooldown',cycleBase+`
+echo 4900 > "$R/restarts"; restart_reason=manual
+if restart_engine; then exit 1; fi
+[ ! -e "$TEST_TMP/restart-count" ]
 `);
 shell('hysteresis needs two consecutive healthy daemon results',common+`
 healthy=0; : > "$R/latched"

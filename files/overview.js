@@ -9,7 +9,7 @@ var logsCall = rpc.declare({ object: 'youtube-watchdog', method: 'logs', expect:
 var setIntervalCall = rpc.declare({ object: 'youtube-watchdog', method: 'set_interval', params: ['minutes'], expect: {} });
 var intervalChoices = [1, 3, 5, 7, 10, 15, 20, 30];
 var actions = {};
-['start', 'stop', 'restart', 'enable', 'disable', 'check'].forEach(function(name) {
+['start', 'stop', 'restart', 'enable', 'disable', 'check', 'restart_engine'].forEach(function(name) {
     actions[name] = rpc.declare({ object: 'youtube-watchdog', method: name, expect: {} });
 });
 var canWrite = L.hasViewPermission();
@@ -29,6 +29,7 @@ var css = `
 .youtube-watchdog-root .youtube-watchdog-button{background:#0B1428;border:1px solid currentColor;border-radius:10px;min-height:44px;padding:10px 12px;font:inherit;font-size:13px;cursor:pointer;box-shadow:0 0 12px #65E9FF08;transition:filter .2s}
 .youtube-watchdog-root .youtube-watchdog-button:hover{filter:brightness(1.3)}
 .youtube-watchdog-root .youtube-watchdog-button:disabled{opacity:.4;cursor:wait}
+.youtube-watchdog-root .youtube-watchdog-engine-restart{width:100%;margin-top:14px;border:2px solid #F6B94B;color:#F6B94B;background:#F6B94B16;font-weight:700;box-shadow:0 0 18px #F6B94B44,inset 0 0 12px #F6B94B12}
 .youtube-watchdog-row{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
 .youtube-watchdog-heading{font-size:17px;font-weight:650;color:#EAF4FF}
 .youtube-watchdog-event{display:flex;gap:12px;border-top:1px solid #A4B3D41b;padding:12px 0;font-size:13px;line-height:1.5}
@@ -75,6 +76,7 @@ return view.extend({
                     error.textContent = e.message || String(e);
                 }).finally(function() { busy = false; disable(serverBusy); });
             };
+            if (action === 'restart_engine') b.classList.add('youtube-watchdog-engine-restart');
             buttons.push(b); return b;
         }
         function tile(label, text, color) {
@@ -99,19 +101,20 @@ return view.extend({
             ]));
             stateCard.appendChild(E('div', { 'class': 'youtube-watchdog-meta' }, 'Последняя проверка: ' + (s.checked_at || '—') + (s.checking ? ' • Проверка выполняется…' : '')));
             var notice = s.recovery_enabled
-                ? 'Автовосстановление включено. Подтверждённый отказ проверяется повторно через 30 секунд; перезапуск — с учётом лимитов.'
+                ? 'Автовосстановление включено. Любая недоступность YouTube, включая ошибки DNS и сети, проверяется повторно через 30 секунд; перезапуск — с учётом лимитов.'
                 : 'Автовосстановление отключено.';
             if (s.reason === 'stale') notice = 'Данные устарели. Дождитесь новой проверки.';
             if (s.reason === 'client_not_configured' || s.reason === 'ssh_missing' || s.reason === 'invalid_client_user') notice = 'Диагностический клиент не настроен. Автоперезапуск запрещён.';
-            if (s.reason === 'client_probe_unknown') notice = 'Нет достоверного ответа от диагностического клиента. Автоперезапуск запрещён.';
-            if (s.reason === 'router_probe_unknown') notice = 'Результат проверки неопределённый. Перезапуск не выполняется.';
-            if (s.reason === 'client_general_network_or_dns' || s.reason === 'router_network_or_dns') notice = 'Ошибка сети или DNS. Автоперезапуск запрещён.';
+            if (s.reason === 'client_probe_unknown') notice = 'Нет ответа диагностического клиента: повторная проверка и перезапуск с учётом лимитов.';
+            if (s.reason === 'router_probe_unknown') notice = 'YouTube не подтверждён: повторная проверка и перезапуск с учётом лимитов.';
+            if (s.recovery_enabled && ['client_general_network_or_dns', 'router_network_or_dns', 'router_dns_failure', 'router_network_failure'].indexOf(s.reason) !== -1) notice = 'Ошибка DNS или сети: повторная проверка через 30 секунд, затем перезапуск с учётом лимитов.';
             if (s.reason === 'configuration_changed' || s.reason === 'not_checked') notice = 'Ожидается достоверная проверка. Автоперезапуск пока запрещён.';
             stateCard.appendChild(E('div', { 'class': 'youtube-watchdog-meta' }, notice));
             stateCard.appendChild(E('div', { 'class': 'youtube-watchdog-grid' }, [
                 button('Запустить', 'ok', 'start'), button('Остановить', 'bad', 'stop'),
                 button('Перезапустить', 'purple', 'restart'), button('Проверить YouTube', 'cyan', 'check')
             ]));
+            stateCard.appendChild(button('Перезапустить ' + (s.engine === 'zapret' ? 'Zapret v1' : 'Zapret2'), 'warn', 'restart_engine'));
             stateCard.appendChild(E('div', { 'class': 'youtube-watchdog-row', 'style': 'margin-top:14px' }, [
                 E('span', { 'class': 'youtube-watchdog-meta' }, 'Автозапуск: ' + (s.enabled ? 'включён' : 'выключен')),
                 button(s.enabled ? 'Выключить' : 'Включить', 'purple', s.enabled ? 'disable' : 'enable')
@@ -176,13 +179,13 @@ return view.extend({
                 var e;
                 try { e = JSON.parse(item.record); } catch (ignore) { return; }
                 var restart = e.type === 'restart', restored = e.status === 'restored';
-                var text = restart ? 'Перезапуск ' + (e.detail === 'engine=zapret' ? 'Zapret v1' : 'Zapret2') + ' • подтверждён отказ YouTube' + (e.reason === 'confirmed_router_failure' ? ' с роутера' : '') + ' • ' + (e.status === 'success' ? 'команда выполнена' : 'ошибка команды')
+                var text = restart ? 'Перезапуск ' + (e.detail === 'engine=zapret' ? 'Zapret v1' : 'Zapret2') + (e.reason === 'manual' ? ' • вручную' : ' • подтверждён отказ YouTube') + (e.reason === 'confirmed_router_failure' ? ' с роутера' : '') + ' • ' + (e.status === 'success' ? 'команда выполнена' : 'ошибка команды')
                     : restored ? 'YouTube восстановлен' : e.status === 'not_restored' ? 'YouTube не восстановлен' : 'Результат неизвестен';
                 var color = restart || e.status === 'unknown' ? 'warn' : restored ? 'ok' : 'bad';
                 if (e.type === 'check') {
-                    text = e.status === 'HEALTHY' ? 'Проверка: YouTube доступен с роутера' : e.status === 'YOUTUBE_DOWN' ? 'Проверка: отказ YouTube' : 'Проверка: сеть, DNS или неопределённый результат';
+                    text = e.status === 'HEALTHY' ? 'Проверка: YouTube доступен с роутера' : ['YOUTUBE_DOWN', 'DNS_DOWN', 'NETWORK_DOWN'].indexOf(e.status) !== -1 ? 'Проверка: отказ YouTube' : 'Проверка: сеть, DNS или неопределённый результат';
                     color = e.status === 'HEALTHY' ? 'ok' : e.status === 'UNKNOWN' ? 'warn' : 'bad';
-                    var reasons = { router_network_or_dns: 'Сбой DNS или общего интернета: восстановление запрещено', router_probe_unknown: 'Неопределённый результат: восстановление запрещено', client_probe_unknown: 'Нет достоверного ответа LAN-клиента', client_not_configured: 'LAN-клиент не настроен', router_local_only: 'Режим наблюдения без восстановления' };
+                    var reasons = { router_network_or_dns: 'DNS или сеть: повторная проверка перед восстановлением', router_dns_failure: 'Ошибка DNS: повторная проверка перед восстановлением', router_network_failure: 'Ошибка сети: повторная проверка перед восстановлением', router_probe_unknown: 'YouTube не подтверждён: повторная проверка перед восстановлением', client_probe_unknown: 'Нет достоверного ответа LAN-клиента', client_not_configured: 'LAN-клиент не настроен', router_local_only: 'Режим наблюдения без восстановления' };
                     if (reasons[e.reason]) text += ' • ' + reasons[e.reason];
                     if (e.detail) {
                         var fields = {};
@@ -194,7 +197,7 @@ return view.extend({
                     }
                 }
                 if (e.type === 'decision') {
-                    text = e.reason === 'cooldown_or_hourly_limit' ? 'Перезапуск отложен: интервал 15 минут или лимит 3 попытки за час' : e.reason === 'zapret_stopped' ? 'Перезапуск пропущен: Zapret2 остановлен' : 'Отказ обнаружен: повторная проверка через 30 секунд';
+                    text = e.reason === 'cooldown_or_hourly_limit' ? 'Перезапуск отложен: интервал 15 минут или лимит 3 попытки за час' : e.reason === 'zapret_stopped' ? 'Перезапуск пропущен: движок намеренно остановлен' : e.reason === 'engine_unavailable' ? 'Перезапуск не выполнен: движок не выбран или init-служба отсутствует' : 'Отказ обнаружен: повторная проверка через 30 секунд';
                     color = 'warn';
                 }
                 if (restart) color = e.status === 'success' ? 'ok' : 'bad';
