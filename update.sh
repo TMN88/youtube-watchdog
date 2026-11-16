@@ -1,8 +1,8 @@
 #!/bin/sh
 # Install/update the current bundle; the legacy install.sh stays unchanged.
 set -eu
-VERSION=1.4.1
-BASE='https://raw.githubusercontent.com/TMN88/youtube-watchdog/7d3f636924653bb47909872ab6b0059d495a68e0'
+VERSION=1.4.2
+BASE='https://raw.githubusercontent.com/TMN88/youtube-watchdog/adf970af3011b3fc01494d27f27d298ede0a502a'
 fail() { echo "Ошибка обновления Watchdog: $*" >&2; exit 1; }
 [ "$(id -u)" = 0 ] || fail 'требуется root'
 . /etc/openwrt_release
